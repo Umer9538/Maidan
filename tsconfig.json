@@ -10,5 +10,12 @@
     "noUncheckedIndexedAccess": false,
     "jsx": "react-jsx"
   },
-  "include": ["**/*.ts", "**/*.tsx", ".expo/types/**/*.ts", "expo-env.d.ts"]
+  "include": ["**/*.ts", "**/*.tsx", ".expo/types/**/*.ts", "expo-env.d.ts"],
+  /*
+   * `server/` is a separate package with its own tsconfig — Node's module resolution, its
+   * own lib, no JSX. Compiling it a second time under Expo's base config type-checks the
+   * same files against settings they were never written for, which surfaces as errors that
+   * are real in neither build. `cd server && npm run typecheck` is what covers it.
+   */
+  "exclude": ["node_modules", "server"]
 }

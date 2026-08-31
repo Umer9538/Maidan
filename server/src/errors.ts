@@ -14,6 +14,11 @@ export type ApiErrorCode =
   | 'already_reviewed'
   | 'already_open'
   | 'not_a_captain'
+  | 'unauthorized'
+  | 'forbidden'
+  | 'invalid_credentials'
+  | 'already_registered'
+  | 'rate_limited'
   | 'validation'
   | 'network';
 
@@ -26,6 +31,13 @@ const STATUS: Record<ApiErrorCode, number> = {
   already_reviewed: 409,
   already_open: 409,
   not_a_captain: 403,
+  unauthorized: 401,
+  forbidden: 403,
+  // 401, not 400: the credentials were understood and refused, and the client's job is to
+  // ask for them again rather than to fix its request.
+  invalid_credentials: 401,
+  already_registered: 409,
+  rate_limited: 429,
   validation: 400,
   network: 503,
 };

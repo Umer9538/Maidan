@@ -8,6 +8,11 @@
 -- password, the refresh token and the OTP are all held as hashes, so a dump of this
 -- database does not hand over anyone's account.
 
+-- An empty string is not an address and not a number, but it is a value, so it collides
+-- with every other blank under a unique index. Absent means NULL from here on.
+UPDATE players SET email = NULL WHERE email = '';
+UPDATE players SET phone = NULL WHERE phone = '';
+
 -- Email is the login handle, and `Umer@…` and `umer@…` are the same person. `players.email`
 -- already carries a UNIQUE constraint, but that one is case-sensitive and would happily
 -- accept both.

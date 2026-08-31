@@ -154,6 +154,16 @@ export type ApiErrorCode =
   | 'already_open'
   /** That captain has already reported, or the team is not in this challenge. */
   | 'not_a_captain'
+  /** No usable session. The client should refresh its token, then sign in if that fails. */
+  | 'unauthorized'
+  /** Signed in, but this is not yours to read or change. */
+  | 'forbidden'
+  /** The email and password do not match an account. Never says which half was wrong. */
+  | 'invalid_credentials'
+  /** That email or phone number already belongs to an account. */
+  | 'already_registered'
+  /** Too many attempts. `retryAfterSeconds` says when to try again. */
+  | 'rate_limited'
   | 'network';
 
 export class ApiError extends Error {
