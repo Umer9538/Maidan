@@ -1,0 +1,28 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "lib": ["ES2023"],
+    "strict": true,
+    "noUncheckedIndexedAccess": false,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "resolveJsonModule": true,
+    "noEmit": true,
+    "types": ["node"],
+    /*
+     * The server shares the app's pure logic and domain types.
+     *
+     * Pricing, the deposit split and the money arithmetic must not drift between client
+     * and server — a booking priced one way on the phone and another on the server is a
+     * dispute with a customer. `src/lib` and `src/domain` are React-free by construction,
+     * so they compile here unchanged.
+     */
+    "paths": { "@/*": ["../src/*"] },
+    "baseUrl": "."
+  },
+  "include": ["src/**/*.ts", "../src/lib/**/*.ts", "../src/domain/**/*.ts"],
+  // The app's tests belong to the app's jest setup, not to the server build.
+  "exclude": ["../src/**/__tests__/**"]
+}
