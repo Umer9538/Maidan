@@ -5,9 +5,14 @@
  * microservices for a launch. Endpoints mirror the client's `MaidanApi` one for one, so
  * swapping the mock for HTTP is a transport change and nothing else.
  *
- * Authentication is a stub: the caller's id arrives in `x-user-id`. Phone + OTP and real
- * tokens come with the SMS provider; every handler already reads the id from one place,
- * so that swap touches `currentUser` and nothing else.
+ * Authentication is a bearer token, verified in `requireAuth` before any route runs, and
+ * every path not in that module's `PUBLIC` list needs one. Protection is therefore the
+ * default: a new endpoint added below is behind sign-in without anyone remembering to say
+ * so, which is the only arrangement where forgetting fails closed.
+ *
+ * Authorisation is separate and per-row. Knowing who is calling is not the same as knowing
+ * what is theirs, so handlers that touch a specific record assert against the record
+ * itself — see `authorize.ts`.
  */
 import cors from 'cors';
 import express, { type NextFunction, type Request, type Response } from 'express';
@@ -15,6 +20,23 @@ import express, { type NextFunction, type Request, type Response } from 'express
 import { perPlayerShare } from '@/lib/money';
 import { toPkt } from '@/lib/datetime';
 
+import {
+  login,
+  logout,
+  refresh,
+  register,
+  requestOtp,
+  verifyOtp,
+} from './auth-service.js';
+import {
+  assertCanSeeBooking,
+  assertCaptain,
+  assertOwnsBooking,
+  assertOwnsVenue,
+  assertThreadMember,
+  currentUser,
+  requireAuth,
+} from './authorize.js';
 import {
   createBooking,
   createManualBooking,
@@ -53,11 +75,12 @@ app.use((req, res, next) => {
   next();
 });
 
-/** Stand-in for the session. Replaced by the token subject when auth lands. */
-function currentUser(req: Request): string {
-  const header = req.header('x-user-id');
-  return header && header.length > 0 ? header : 'player-self';
-}
+/*
+ * Mounted here, ahead of every route below, so protection is structural rather than
+ * remembered. Anything added after this line is behind a token unless `authorize.ts`
+ * names it public.
+ */
+app.use(requireAuth);
 
 /** Wraps an async handler so a rejection reaches the error middleware. */
 function route(handler: (req: Request, res: Response) => Promise<unknown>) {
@@ -72,6 +95,50 @@ function required(value: unknown, name: string): string {
   }
   return value;
 }
+
+// ------------------------------------------------------------------------------ health --
+
+// -------------------------------------------------------------------------------- auth --
+
+app.post('/auth/register', route(async (req, res) => {
+  const session = await register({
+    fullName: required(req.body?.fullName, 'fullName'),
+    email: required(req.body?.email, 'email'),
+    phone: required(req.body?.phone, 'phone'),
+    password: required(req.body?.password, 'password'),
+  });
+  res.status(201).json(session);
+}));
+
+app.post('/auth/login', route(async (req, res) => {
+  const session = await login(
+    required(req.body?.email, 'email'),
+    required(req.body?.password, 'password'),
+  );
+  res.json(session);
+}));
+
+app.post('/auth/otp', route(async (req, res) => {
+  res.json(await requestOtp(required(req.body?.phone, 'phone')));
+}));
+
+app.post('/auth/otp/verify', route(async (req, res) => {
+  const session = await verifyOtp(
+    required(req.body?.phone, 'phone'),
+    required(req.body?.code, 'code'),
+    typeof req.body?.fullName === 'string' ? req.body.fullName : undefined,
+  );
+  res.json(session);
+}));
+
+app.post('/auth/refresh', route(async (req, res) => {
+  res.json(await refresh(required(req.body?.refreshToken, 'refreshToken')));
+}));
+
+app.post('/auth/logout', route(async (req, res) => {
+  await logout(required(req.body?.refreshToken, 'refreshToken'));
+  res.status(204).end();
+}));
 
 // ------------------------------------------------------------------------------ health --
 
@@ -170,6 +237,10 @@ app.get('/bookings', route(async (req, res) => {
 }));
 
 app.get('/bookings/:bookingId', route(async (req, res) => {
+  // A booking carries a name, a phone number, a code and a price. Readable by the player
+  // who made it and by the owner of the ground, and by nobody else.
+  await assertCanSeeBooking(req.params.bookingId, currentUser(req));
+
   const { rows } = await pool.query('SELECT * FROM bookings WHERE id = $1', [
     req.params.bookingId,
   ]);
@@ -178,6 +249,10 @@ app.get('/bookings/:bookingId', route(async (req, res) => {
 }));
 
 app.post('/bookings/:bookingId/cancel', route(async (req, res) => {
+  // This one was the worst of them: any caller could cancel any booking, and the slot
+  // would go back on sale under the player who had paid for it.
+  await assertOwnsBooking(req.params.bookingId, currentUser(req));
+
   const { rows } = await pool.query(
     "UPDATE bookings SET status = 'cancelled' WHERE id = $1 RETURNING *",
     [req.params.bookingId],
@@ -187,6 +262,10 @@ app.post('/bookings/:bookingId/cancel', route(async (req, res) => {
 }));
 
 app.post('/bookings/:bookingId/review', route(async (req, res) => {
+  // A verified review means the reviewer played. Without this, anyone could post one
+  // against a stranger's completed booking.
+  await assertOwnsBooking(req.params.bookingId, currentUser(req));
+
   const { rows: bookings } = await pool.query('SELECT * FROM bookings WHERE id = $1', [
     req.params.bookingId,
   ]);
@@ -236,6 +315,9 @@ app.post('/bookings/:bookingId/review', route(async (req, res) => {
 // -------------------------------------------------------------------------- owner side --
 
 app.get('/venues/:venueId/bookings', route(async (req, res) => {
+  // A day of customer names and phone numbers. The owner's, and only the owner's.
+  await assertOwnsVenue(req.params.venueId, currentUser(req));
+
   const day = toPkt(required(req.query.day, 'day'));
   const from = new Date(Date.UTC(day.year, day.month - 1, day.day, -5, 0, 0));
   const to = new Date(from.getTime() + 24 * 3_600_000);
@@ -250,6 +332,9 @@ app.get('/venues/:venueId/bookings', route(async (req, res) => {
 }));
 
 app.post('/venues/:venueId/bookings', route(async (req, res) => {
+  // Writing a booking onto someone else's court, at a price of your choosing.
+  await assertOwnsVenue(req.params.venueId, currentUser(req));
+
   const booking = await createManualBooking({
     courtId: required(req.body?.courtId, 'courtId'),
     startAt: required(req.body?.startAt, 'startAt'),
@@ -262,6 +347,9 @@ app.post('/venues/:venueId/bookings', route(async (req, res) => {
 }));
 
 app.get('/venues/:venueId/earnings', route(async (req, res) => {
+  // What the ground took this week. Nobody else's business.
+  await assertOwnsVenue(req.params.venueId, currentUser(req));
+
   const dayIso = required(req.query.day, 'day');
   const day = toPkt(dayIso);
   const from = new Date(Date.UTC(day.year, day.month - 1, day.day, -5, 0, 0));
@@ -331,6 +419,10 @@ app.get('/matches/:matchId', route(async (req, res) => {
 
 app.post('/matches', route(async (req, res) => {
   const bookingId = required(req.body?.bookingId, 'bookingId');
+  // Opening a match invites strangers to a court someone has paid for, and the host it
+  // records is the person who booked it. That has to be the person asking.
+  await assertOwnsBooking(bookingId, currentUser(req));
+
   const { rows: bookings } = await pool.query('SELECT * FROM bookings WHERE id = $1', [bookingId]);
   if (bookings.length === 0) throw new ApiError('not_found', 'No such booking');
   const booking = bookings[0];
@@ -484,6 +576,9 @@ app.post('/challenges', route(async (req, res) => {
   const challengerTeamId = required(req.body?.challengerTeamId, 'challengerTeamId');
   const opponentTeamId = req.body?.opponentTeamId ?? null;
 
+  // Committing a team to a fixture, and to a stake. The captain's call.
+  await assertCaptain(challengerTeamId, currentUser(req));
+
   const { rows: teams } = await pool.query('SELECT sport FROM teams WHERE id = $1', [
     challengerTeamId,
   ]);
@@ -513,6 +608,8 @@ app.post('/challenges', route(async (req, res) => {
 
 app.post('/challenges/:challengeId/accept', route(async (req, res) => {
   const teamId = req.body?.teamId ?? null;
+  if (teamId) await assertCaptain(teamId, currentUser(req));
+
   const { rows } = await pool.query(
     `UPDATE challenges SET status = 'accepted', opponent_team_id = COALESCE($2, opponent_team_id)
       WHERE id = $1 RETURNING *`,
@@ -536,6 +633,10 @@ app.post('/challenges/:challengeId/score', route(async (req, res) => {
   if (teamId !== challenge.challenger_team_id && teamId !== challenge.opponent_team_id) {
     throw new ApiError('not_a_captain', 'Only the two teams playing can report a score.');
   }
+
+  // Being one of the two teams is not enough — the caller has to be that team's captain,
+  // or any member could report a result on their side's behalf.
+  await assertCaptain(teamId, currentUser(req));
 
   const reports = {
     ...challenge.reported_scores,
@@ -589,6 +690,8 @@ app.get('/threads', route(async (req, res) => {
 }));
 
 app.get('/threads/:threadId/messages', route(async (req, res) => {
+  await assertThreadMember(req.params.threadId, currentUser(req));
+
   const { rows } = await pool.query(
     `SELECT m.*, p.full_name AS author_name
        FROM messages m JOIN players p ON p.id = m.author_id
@@ -601,6 +704,8 @@ app.get('/threads/:threadId/messages', route(async (req, res) => {
 app.post('/threads/:threadId/messages', route(async (req, res) => {
   const body = required(req.body?.body, 'body');
   const userId = currentUser(req);
+  // Otherwise anyone with a thread id could both read a conversation and speak in it.
+  await assertThreadMember(req.params.threadId, userId);
 
   const { rows } = await pool.query(
     `INSERT INTO messages (id, thread_id, author_id, body) VALUES ($1,$2,$3,$4) RETURNING *`,

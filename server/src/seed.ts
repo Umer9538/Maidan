@@ -7,7 +7,16 @@
  */
 import * as seed from '@/data/seed';
 
+import { hashPassword } from './auth.js';
 import { pool } from './db.js';
+
+/**
+ * The password every seeded account shares.
+ *
+ * Development data only — the seed truncates the database before it runs, so it can never
+ * be pointed at anything real without destroying it first.
+ */
+export const SEED_PASSWORD = 'maidan-dev-password';
 
 /** Venues reference owners the player list does not carry; they are created as needed. */
 function ownerPlaceholder(ownerId: string) {
@@ -22,7 +31,7 @@ async function main() {
 
   console.log('clearing…');
   await pool.query(`
-    TRUNCATE reviews, notifications, messages, thread_members, chat_threads,
+    TRUNCATE credentials, refresh_tokens, reviews, notifications, messages, thread_members, chat_threads,
              match_players, open_matches, challenges, team_members, teams,
              payment_events, slot_holds, bookings, courts, venues, players,
              cancellation_policies
@@ -39,20 +48,33 @@ async function main() {
   const known = new Set(seed.players.map((player) => player.id));
   const extraOwners = [...ownerIds].filter((id) => !known.has(id)).map(ownerPlaceholder);
 
-  for (const player of [...seed.players, ...extraOwners]) {
+  for (const [index, player] of [...seed.players, ...extraOwners].entries()) {
     await pool.query(
-      `INSERT INTO players (id, full_name, avatar_url, reliability, games_played, skill_by_sport, phone)
-       VALUES ($1,$2,$3,$4,$5,$6,$7)`,
+      `INSERT INTO players (id, full_name, email, avatar_url, reliability, games_played, skill_by_sport, phone)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
       [
         player.id,
         player.name,
+        `${player.id}@maidan.test`,
         player.avatarUrl,
         'reliability' in player ? player.reliability : 100,
         'gamesPlayed' in player ? player.gamesPlayed : 0,
         JSON.stringify('skillBySport' in player ? player.skillBySport : {}),
-        player.id === seed.CURRENT_USER_ID ? '+923001234567' : '',
+        // Distinct per player: the unique index treats two accounts on one number as a
+        // collision, and blank is not a number.
+        player.id === seed.CURRENT_USER_ID
+          ? '+923001234567'
+          : `+9230012${String(index).padStart(5, '0')}`,
       ],
     );
+
+    // Every seeded player can actually sign in. Without credentials the seed produces a
+    // database that looks complete and that nothing can authenticate against, which makes
+    // the smoke test — and anyone poking at the API by hand — impossible.
+    await pool.query('INSERT INTO credentials (player_id, password_hash) VALUES ($1,$2)', [
+      player.id,
+      await hashPassword(SEED_PASSWORD),
+    ]);
   }
 
   console.log(`venues: ${seed.venues.length}`);
