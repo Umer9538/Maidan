@@ -7,9 +7,10 @@
     "dev": "tsx watch src/index.ts",
     "start": "tsx src/index.ts",
     "seed": "tsx src/seed.ts",
-    "migrate": "psql -d $npm_config_db -f sql/001_schema.sql",
+    "migrate": "psql -d $npm_config_db -f sql/001_schema.sql -f sql/002_auth.sql",
     "typecheck": "tsc --noEmit",
-    "smoke": "tsx src/smoke.ts"
+    "smoke": "tsx src/smoke.ts",
+    "test": "node --import tsx --test \"src/**/*.test.ts\""
   },
   "dependencies": {
     "cors": "^2.8.5",
