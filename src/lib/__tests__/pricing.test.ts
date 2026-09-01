@@ -118,3 +118,33 @@ describe('calculatePayment', () => {
     expect(breakdown.dueAtVenue).toBe(3333 - Math.ceil((3333 * DEPOSIT_PERCENT) / 100));
   });
 });
+
+describe('peak rules written by an owner', () => {
+  it('treats a rule with no daysOfWeek as every day rather than throwing', () => {
+    // These are stored as JSON, so a rule can reach here without the field — and reading
+    // `.length` off `undefined` failed inside the slot grid, surfacing as a 500 on a court
+    // that was otherwise perfectly well configured.
+    const court = {
+      id: 'court-x',
+      venueId: 'venue-x',
+      name: 'Pitch A',
+      sport: 'futsal',
+      format: 'futsal_5v5',
+      surface: 'turf',
+      indoor: false,
+      basePricePerHour: 3000,
+      peakRules: [{ from: '18:00', to: '03:00', pricePerHour: 4200 }],
+    } as unknown as Court;
+
+    // 9 PM PKT on a Wednesday.
+    expect(resolveSlotPrice(court, '2026-09-02T16:00:00Z')).toEqual({
+      price: 4200,
+      isPeak: true,
+    });
+    // 11 AM PKT, outside the window.
+    expect(resolveSlotPrice(court, '2026-09-02T06:00:00Z')).toEqual({
+      price: 3000,
+      isPeak: false,
+    });
+  });
+});

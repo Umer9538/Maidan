@@ -32,11 +32,23 @@ import {
   assertCanSeeBooking,
   assertCaptain,
   assertOwnsBooking,
+  assertOwnsCourt,
   assertOwnsVenue,
   assertThreadMember,
   currentUser,
   requireAuth,
 } from './authorize.js';
+import {
+  addCourt,
+  createVenue,
+  createCourtSchema,
+  createVenueSchema,
+  deleteCourt,
+  updateCourt,
+  updateCourtSchema,
+  updateVenue,
+  updateVenueSchema,
+} from './venue-service.js';
 import {
   createBooking,
   createManualBooking,
@@ -88,6 +100,40 @@ function route(handler: (req: Request, res: Response) => Promise<unknown>) {
   return (req: Request, res: Response, next: NextFunction) => {
     handler(req, res).catch(next);
   };
+}
+
+/**
+ * Validates a body against a schema, turning a failure into the client's own error
+ * vocabulary rather than letting a zod exception surface as a 500.
+ */
+function parse<T>(schema: { safeParse: (value: unknown) => SafeParse<T> }, body: unknown): T {
+  const result = schema.safeParse(body ?? {});
+  if (!result.success) {
+    const issue = result.error.issues[0];
+    const field = issue?.path.join('.');
+    throw new ApiError('validation', field ? `${field}: ${issue.message}` : issue.message);
+  }
+  return result.data;
+}
+
+type SafeParse<T> =
+  | { success: true; data: T }
+  | { success: false; error: { issues: { path: (string | number)[]; message: string }[] } };
+
+/**
+ * A `day` query parameter, as a PKT calendar day.
+ *
+ * Parsed here so a malformed value is a 400 that names the problem, rather than a `NaN`
+ * that travels into the slot grid and arrives as a 500. Clients send `toISOString()`, which
+ * ends in `Z`; a `+05:00` offset left unencoded in a URL arrives with the `+` as a space.
+ */
+function pktDay(value: unknown, name = 'day') {
+  const iso = required(value, name);
+  try {
+    return toPkt(iso);
+  } catch {
+    throw new ApiError('validation', `${name} must be an ISO timestamp, like 2026-09-02T18:00:00Z`);
+  }
 }
 
 function required(value: unknown, name: string): string {
@@ -175,6 +221,57 @@ app.get('/venues', route(async (req, res) => {
   res.json(rows.map(toVenue));
 }));
 
+/**
+ * The caller's own grounds, whatever their status.
+ *
+ * `GET /venues` only returns `live` ones, so without this an owner could create a venue and
+ * then have no way to see it — it would be invisible to them until someone verified it.
+ */
+app.get('/venues/mine', route(async (req, res) => {
+  const { rows } = await pool.query('SELECT * FROM venues WHERE owner_id = $1 ORDER BY name', [
+    currentUser(req),
+  ]);
+  res.json(rows.map(toVenue));
+}));
+
+app.post('/venues', route(async (req, res) => {
+  const input = parse(createVenueSchema, req.body);
+  const id = await createVenue(currentUser(req), input);
+
+  const { rows } = await pool.query('SELECT * FROM venues WHERE id = $1', [id]);
+  res.status(201).json(toVenue(rows[0]));
+}));
+
+app.patch('/venues/:venueId', route(async (req, res) => {
+  await assertOwnsVenue(req.params.venueId, currentUser(req));
+  await updateVenue(req.params.venueId, parse(updateVenueSchema, req.body));
+
+  const { rows } = await pool.query('SELECT * FROM venues WHERE id = $1', [req.params.venueId]);
+  res.json(toVenue(rows[0]));
+}));
+
+app.post('/venues/:venueId/courts', route(async (req, res) => {
+  await assertOwnsVenue(req.params.venueId, currentUser(req));
+  const id = await addCourt(req.params.venueId, parse(createCourtSchema, req.body));
+
+  const { rows } = await pool.query('SELECT * FROM courts WHERE id = $1', [id]);
+  res.status(201).json(toCourt(rows[0]));
+}));
+
+app.patch('/courts/:courtId', route(async (req, res) => {
+  await assertOwnsCourt(req.params.courtId, currentUser(req));
+  await updateCourt(req.params.courtId, parse(updateCourtSchema, req.body));
+
+  const { rows } = await pool.query('SELECT * FROM courts WHERE id = $1', [req.params.courtId]);
+  res.json(toCourt(rows[0]));
+}));
+
+app.delete('/courts/:courtId', route(async (req, res) => {
+  await assertOwnsCourt(req.params.courtId, currentUser(req));
+  await deleteCourt(req.params.courtId);
+  res.status(204).end();
+}));
+
 app.get('/venues/:venueId', route(async (req, res) => {
   const { rows } = await pool.query('SELECT * FROM venues WHERE id = $1', [req.params.venueId]);
   if (rows.length === 0) throw new ApiError('not_found', 'No such venue');
@@ -201,7 +298,10 @@ app.get('/venues/:venueId/reviews', route(async (req, res) => {
 // ------------------------------------------------------------------- slots and holds --
 
 app.get('/courts/:courtId/slots', route(async (req, res) => {
+  // Validated here even though `listSlots` takes the raw string: an unparseable day would
+  // otherwise reach the grid and fail deep inside it as a 500.
   const day = required(req.query.day, 'day');
+  pktDay(day);
   res.json(await listSlots(req.params.courtId, day));
 }));
 
@@ -319,7 +419,7 @@ app.get('/venues/:venueId/bookings', route(async (req, res) => {
   // A day of customer names and phone numbers. The owner's, and only the owner's.
   await assertOwnsVenue(req.params.venueId, currentUser(req));
 
-  const day = toPkt(required(req.query.day, 'day'));
+  const day = pktDay(req.query.day);
   const from = new Date(Date.UTC(day.year, day.month - 1, day.day, -5, 0, 0));
   const to = new Date(from.getTime() + 24 * 3_600_000);
 
@@ -352,7 +452,7 @@ app.get('/venues/:venueId/earnings', route(async (req, res) => {
   await assertOwnsVenue(req.params.venueId, currentUser(req));
 
   const dayIso = required(req.query.day, 'day');
-  const day = toPkt(dayIso);
+  const day = pktDay(dayIso);
   const from = new Date(Date.UTC(day.year, day.month - 1, day.day, -5, 0, 0));
   const to = new Date(from.getTime() + 24 * 3_600_000);
   const weekFrom = new Date(from.getTime() - 6 * 24 * 3_600_000);

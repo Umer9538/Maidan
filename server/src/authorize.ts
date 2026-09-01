@@ -122,6 +122,18 @@ export async function assertOwnsVenue(venueId: string, playerId: string): Promis
   if (rows.length === 0 || rows[0].owner_id !== playerId) deny();
 }
 
+/** A court is the venue's, so the question is really about the ground it sits on. */
+export async function assertOwnsCourt(courtId: string, playerId: string): Promise<void> {
+  const { rows } = await pool.query<{ owner_id: string }>(
+    `SELECT v.owner_id
+       FROM courts c
+       JOIN venues v ON v.id = c.venue_id
+      WHERE c.id = $1`,
+    [courtId],
+  );
+  if (rows.length === 0 || rows[0].owner_id !== playerId) deny();
+}
+
 export async function assertThreadMember(threadId: string, playerId: string): Promise<void> {
   const { rows } = await pool.query(
     'SELECT 1 FROM thread_members WHERE thread_id = $1 AND user_id = $2',

@@ -48,6 +48,20 @@ export interface PktParts {
 /** Shifts an instant into PKT and reads its wall-clock fields. */
 export function toPkt(instant: Date | string): PktParts {
   const date = typeof instant === 'string' ? new Date(instant) : instant;
+
+  /*
+   * An unparseable instant is rejected here rather than allowed through as `NaN`.
+   *
+   * Without this every field below comes back `NaN`, which survives arithmetic and array
+   * lengths untouched and only fails much later — a bad `day` query parameter surfaced as
+   * `RangeError: Invalid time value` inside the slot grid, three frames from the cause, and
+   * reached the client as a 500. The offending value was a date whose `+05:00` offset had
+   * been decoded as a space, which is what a URL does to an unencoded `+`.
+   */
+  if (Number.isNaN(date.getTime())) {
+    throw new RangeError(`Not a date: ${String(instant)}`);
+  }
+
   const shifted = new Date(date.getTime() + PKT_OFFSET_MINUTES * MS_PER_MINUTE);
   return {
     year: shifted.getUTCFullYear(),

@@ -30,7 +30,11 @@ export function isWithinWindow(minutes: number, from: string, to: string): boole
 
 function ruleApplies(rule: PeakRule, startAt: Timestamp): boolean {
   const { weekday, hour, minute } = toPkt(startAt);
-  const matchesDay = rule.daysOfWeek.length === 0 || rule.daysOfWeek.includes(weekday);
+  // `?? []` because these rules are stored as JSON and an older or hand-written row may not
+  // carry the field. Reading `.length` off `undefined` threw inside the slot grid, which
+  // reached the client as a 500 on a court that was otherwise perfectly well configured.
+  const days = rule.daysOfWeek ?? [];
+  const matchesDay = days.length === 0 || days.includes(weekday);
   return matchesDay && isWithinWindow(hour * 60 + minute, rule.from, rule.to);
 }
 

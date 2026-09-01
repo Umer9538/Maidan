@@ -173,3 +173,15 @@ describe('formatOpeningHours', () => {
     expect(formatOpeningHours('09:30', '23:00')).toBe('Open 9:30 AM – 11 PM');
   });
 });
+
+describe('toPkt', () => {
+  it('refuses an instant it cannot parse instead of returning NaN parts', () => {
+    // NaN survives arithmetic and array lengths untouched, so a bad `day` parameter used to
+    // travel all the way into the slot grid and fail there as `Invalid time value` — a 500,
+    // three frames from the cause. The value that did it was a timestamp whose `+05:00`
+    // offset had been decoded as a space, which is what a URL does to an unencoded `+`.
+    expect(() => toPkt('not-a-date')).toThrow(RangeError);
+    expect(() => toPkt('2026-09-02T21:26:38.847500 00:00')).toThrow(RangeError);
+    expect(() => toPkt(new Date(NaN))).toThrow(RangeError);
+  });
+});
