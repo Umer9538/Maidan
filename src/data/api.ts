@@ -12,6 +12,7 @@ import type {
   Challenge,
   ChallengeStake,
   ChatThread,
+  Amenity,
   City,
   Court,
   CurrentPlayer,
@@ -22,6 +23,7 @@ import type {
   OpenMatch,
   PaymentMode,
   PaymentProvider,
+  PeakRule,
   Player,
   Review,
   Rupees,
@@ -143,6 +145,33 @@ export interface CreateTeamInput {
 }
 
 /** Errors the UI must distinguish, rather than showing one generic failure. */
+export type VenueStatus = Venue['status'];
+
+export interface CreateVenueInput {
+  name: string;
+  city: City;
+  area: string;
+  latitude: number;
+  longitude: number;
+  /** 24-hour wall clock. Closing may be earlier than opening — grounds here run past midnight. */
+  opensAt: string;
+  closesAt: string;
+  phone?: string;
+  about?: string;
+  amenities?: Amenity[];
+  photos?: string[];
+}
+
+export interface CreateCourtInput {
+  name: string;
+  sport: Sport;
+  format: MatchFormat;
+  surface?: string;
+  indoor?: boolean;
+  basePricePerHour: Rupees;
+  peakRules?: PeakRule[];
+}
+
 export interface AuthSession {
   accessToken: string;
   refreshToken: string;
@@ -194,6 +223,8 @@ export type ApiErrorCode =
   | 'already_registered'
   /** Too many attempts. `retryAfterSeconds` says when to try again. */
   | 'rate_limited'
+  /** The request was understood and refused. `message` says what to fix and is safe to show. */
+  | 'validation'
   | 'network';
 
 export class ApiError extends Error {
@@ -305,6 +336,31 @@ export interface MaidanApi {
 
   /** Saves the setup choices and the profile fields that share a screen with them. */
   updateProfile(input: UpdateProfileInput): Promise<CurrentPlayer>;
+
+  // ---------------------------------------------------------------------- owner side --
+  //
+  // Listing a ground and saying how big it is. A new venue is `pending` and nothing on it
+  // is bookable — in the app or at the counter — until MAIDAN approves it, so these calls
+  // put a listing into review rather than into the marketplace.
+
+  /** The caller's own grounds, whatever their status. Discovery only ever returns `live`. */
+  listMyVenues(): Promise<Venue[]>;
+  createVenue(input: CreateVenueInput): Promise<Venue>;
+  updateVenue(venueId: string, input: Partial<CreateVenueInput>): Promise<Venue>;
+  addCourt(venueId: string, input: CreateCourtInput): Promise<Court>;
+  updateCourt(courtId: string, input: Partial<CreateCourtInput>): Promise<Court>;
+  removeCourt(courtId: string): Promise<void>;
+  /** Approved grounds only, and only once there is a court to book. */
+  publishVenue(venueId: string): Promise<Venue>;
+  /** Stops sales at once — a refit, a closed season. Bookings already made stand. */
+  unpublishVenue(venueId: string): Promise<Venue>;
+
+  // --------------------------------------------------------------------------- admin --
+
+  listVenuesForReview(status: VenueStatus): Promise<Venue[]>;
+  approveVenue(venueId: string, note?: string): Promise<Venue>;
+  /** The note is required: a rejection with no reason leaves an owner nothing to act on. */
+  rejectVenue(venueId: string, note: string): Promise<Venue>;
 
   // ------------------------------------------------------------------------------ auth --
   //

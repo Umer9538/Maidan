@@ -76,6 +76,9 @@ interface MutableState {
   threads: ChatThread[];
   messages: Message[];
   notifications: Notification[];
+  /** Grounds listed at runtime, and the courts on them. The seeded venues are immutable. */
+  venues: Venue[];
+  courts: Court[];
 }
 
 function initialState(seedBookings: boolean, now: () => Date): MutableState {
@@ -91,6 +94,8 @@ function initialState(seedBookings: boolean, now: () => Date): MutableState {
     threads: seed.chatThreads.map((thread) => ({ ...thread })),
     messages: seed.messages.map((message) => ({ ...message })),
     notifications: seed.notifications.map((notification) => ({ ...notification })),
+    venues: [],
+    courts: [],
   };
 }
 
@@ -130,9 +135,10 @@ function initialAccount(): CurrentPlayer {
     phone: '+923001234567',
     sports: ['padel', 'futsal', 'cricket'],
     city: 'lahore',
-    // A player account. The owner dashboard is reached in development through the gate
-    // bypass, not by pretending every mock user runs a ground.
+    // A player account. The owner and admin surfaces are reached in development through
+    // the gate bypass, not by pretending every mock user runs a ground.
     ownedVenueIds: [],
+    isAdmin: false,
   };
 }
 
@@ -196,7 +202,9 @@ export function createMockApi(
     async listVenues(filters: VenueFilters = {}) {
       const query = filters.query?.trim().toLowerCase();
       return delay(
-        seed.venues.filter((venue) => {
+        // Seeded and runtime grounds together, so a venue listed and published in this
+        // session shows up in search exactly as it would against the server.
+        [...seed.venues, ...state.venues].filter((venue) => {
           if (venue.status !== 'live') return false;
           if (filters.sport && !venue.sports.includes(filters.sport)) return false;
           if (filters.maxPricePerHour && venue.fromPricePerHour > filters.maxPricePerHour) {
@@ -768,7 +776,181 @@ export function createMockApi(
     async signOut() {
       await latency();
     },
+
+    // ------------------------------------------------------------------ owner side --
+    //
+    // The approval gate is reproduced here, not skipped. A mock that let an owner book on
+    // a pending ground would make the flow look finished while the server refused it, and
+    // the whole point of the mock is that a screen behaves the same against either.
+
+    async listMyVenues() {
+      await latency();
+      return [...seed.venues, ...state.venues].filter((venue) => venue.ownerId === account.id);
+    },
+
+    async createVenue(input) {
+      await latency();
+      const venue: Venue = {
+        id: `venue-${Date.now().toString(36)}`,
+        ownerId: account.id,
+        name: input.name.trim(),
+        city: input.city,
+        area: input.area.trim(),
+        geo: { latitude: input.latitude, longitude: input.longitude },
+        sports: [],
+        amenities: input.amenities ?? [],
+        photos: input.photos ?? [],
+        about: input.about ?? '',
+        hours: { opensAt: input.opensAt, closesAt: input.closesAt },
+        // Derived from the courts, so it stays at zero until there is one.
+        fromPricePerHour: 0,
+        phone: input.phone ?? '',
+        rating: null,
+        reviewCount: 0,
+        playerCount: 0,
+        status: 'pending',
+        reviewNote: null,
+        cancellationPolicyId: 'standard',
+      };
+      state.venues.push(venue);
+      return { ...venue };
+    },
+
+    async updateVenue(venueId, input) {
+      await latency();
+      const venue = mutableVenue(venueId);
+      Object.assign(venue, {
+        name: input.name?.trim() ?? venue.name,
+        city: input.city ?? venue.city,
+        area: input.area?.trim() ?? venue.area,
+        about: input.about ?? venue.about,
+        phone: input.phone ?? venue.phone,
+        amenities: input.amenities ?? venue.amenities,
+        photos: input.photos ?? venue.photos,
+        hours: {
+          opensAt: input.opensAt ?? venue.hours.opensAt,
+          closesAt: input.closesAt ?? venue.hours.closesAt,
+        },
+      });
+      return { ...venue };
+    },
+
+    async addCourt(venueId, input) {
+      await latency();
+      mutableVenue(venueId);
+      const court: Court = {
+        id: `court-${Date.now().toString(36)}-${state.courts.length}`,
+        venueId,
+        name: input.name.trim(),
+        sport: input.sport,
+        format: input.format,
+        surface: input.surface ?? '',
+        indoor: input.indoor ?? false,
+        basePricePerHour: input.basePricePerHour,
+        peakRules: input.peakRules ?? [],
+      };
+      state.courts.push(court);
+      syncVenue(venueId);
+      return { ...court };
+    },
+
+    async updateCourt(courtId, input) {
+      await latency();
+      const court = state.courts.find((candidate) => candidate.id === courtId);
+      if (!court) throw new ApiError('not_found', 'No such court');
+      Object.assign(court, {
+        name: input.name?.trim() ?? court.name,
+        sport: input.sport ?? court.sport,
+        format: input.format ?? court.format,
+        surface: input.surface ?? court.surface,
+        indoor: input.indoor ?? court.indoor,
+        basePricePerHour: input.basePricePerHour ?? court.basePricePerHour,
+        peakRules: input.peakRules ?? court.peakRules,
+      });
+      syncVenue(court.venueId);
+      return { ...court };
+    },
+
+    async removeCourt(courtId) {
+      await latency();
+      const court = state.courts.find((candidate) => candidate.id === courtId);
+      if (!court) throw new ApiError('not_found', 'No such court');
+      if (state.bookings.some((booking) => booking.courtId === courtId)) {
+        throw new ApiError(
+          'validation',
+          'This court has bookings. Cancel them before removing it.',
+        );
+      }
+      state.courts = state.courts.filter((candidate) => candidate.id !== courtId);
+      syncVenue(court.venueId);
+    },
+
+    async publishVenue(venueId) {
+      await latency();
+      const venue = mutableVenue(venueId);
+      if (!state.courts.some((court) => court.venueId === venueId)) {
+        throw new ApiError('validation', 'Add at least one court before going live.');
+      }
+      if (venue.status !== 'verified' && venue.status !== 'live') {
+        throw new ApiError('validation', 'This ground has not been approved yet.');
+      }
+      venue.status = 'live';
+      return { ...venue };
+    },
+
+    async unpublishVenue(venueId) {
+      await latency();
+      const venue = mutableVenue(venueId);
+      if (venue.status !== 'live') throw new ApiError('validation', 'This ground is not live.');
+      venue.status = 'verified';
+      return { ...venue };
+    },
+
+    // ----------------------------------------------------------------------- admin --
+
+    async listVenuesForReview(status) {
+      await latency();
+      return state.venues.filter((venue) => venue.status === status).map((v) => ({ ...v }));
+    },
+
+    async approveVenue(venueId, note) {
+      await latency();
+      const venue = mutableVenue(venueId);
+      venue.status = 'verified';
+      venue.reviewNote = note ?? null;
+      return { ...venue };
+    },
+
+    async rejectVenue(venueId, note) {
+      await latency();
+      const venue = mutableVenue(venueId);
+      venue.status = 'rejected';
+      venue.reviewNote = note;
+      return { ...venue };
+    },
   };
+
+  /** A runtime venue by id. Seeded ones are immutable, so they are not offered for editing. */
+  function mutableVenue(venueId: string): Venue {
+    const venue = state.venues.find((candidate) => candidate.id === venueId);
+    if (!venue) throw new ApiError('not_found', 'No such ground');
+    return venue;
+  }
+
+  /**
+   * Keeps the venue's headline price and sport list in step with its courts, as the server
+   * does. Both are copies kept for the discovery list, and a copy that is not refreshed is
+   * a lie: adding a cheaper court has to move the "from" price a player sees.
+   */
+  function syncVenue(venueId: string): void {
+    const venue = state.venues.find((candidate) => candidate.id === venueId);
+    if (!venue) return;
+    const courts = state.courts.filter((court) => court.venueId === venueId);
+    venue.fromPricePerHour = courts.length
+      ? Math.min(...courts.map((court) => court.basePricePerHour))
+      : 0;
+    venue.sports = [...new Set(courts.map((court) => court.sport))].sort();
+  }
 }
 
 /**

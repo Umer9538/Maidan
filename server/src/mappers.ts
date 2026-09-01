@@ -47,6 +47,7 @@ export function toCurrentPlayer(row: Row, ownedVenueIds: string[]): CurrentPlaye
     sports: row.sports ?? [],
     city: row.city ?? null,
     ownedVenueIds,
+    isAdmin: row.is_admin === true,
   };
 }
 

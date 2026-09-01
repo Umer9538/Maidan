@@ -33,6 +33,7 @@ export type IconName =
   | 'lock'
   | 'mail'
   | 'more-vertical'
+  | 'plus'
   | 'profile'
   | 'search'
   | 'shield'
@@ -384,6 +385,18 @@ const glyphs: Record<IconName, (props: GlyphProps) => React.ReactElement> = {
       strokeWidth={STROKE}
       strokeLinejoin="round"
       fill={bold ? color : 'none'}
+    />
+  ),
+
+  // Add. Drawn on the same 24pt box and stroke weight as the rest, so it sits level with
+  // them in a bar rather than reading as a slightly different size.
+  plus: ({ color }) => (
+    <Path
+      d="M12 5v14M5 12h14"
+      stroke={color}
+      strokeWidth={STROKE + 0.4}
+      strokeLinecap="round"
+      fill="none"
     />
   ),
 

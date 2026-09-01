@@ -19,9 +19,16 @@ import {
   TextField,
   Toggle,
 } from '@/components/ui';
-import { useAuth } from '@/features/auth/context';
+import { useAuth, type AuthError } from '@/features/auth/context';
 import { isValidEmail, isValidPassword } from '@/features/auth/validation';
 import { colors, s, spacing } from '@/theme';
+
+const FAILURES: Record<AuthError, string> = {
+  invalid_credentials: 'That email and password do not match an account.',
+  email_taken: 'That email already has an account.',
+  weak_password: 'Use at least 8 characters.',
+  network: 'Could not reach Maidan. Check your connection and try again.',
+};
 
 export default function SignInScreen() {
   const router = useRouter();
@@ -54,7 +61,11 @@ export default function SignInScreen() {
     const error = await signIn(email, password);
     setBusy(false);
     // The root layout's guard swaps the stack once the status flips; nothing to navigate.
-    if (error) setFailure('That email and password do not match an account.');
+    //
+    // A dropped connection gets its own message. Telling someone on a bad signal that their
+    // password is wrong sends them off to reset a password that was never the problem — and
+    // on these networks that is the more likely of the two.
+    if (error) setFailure(FAILURES[error]);
   };
 
   return (

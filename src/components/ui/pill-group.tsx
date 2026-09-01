@@ -12,6 +12,12 @@ import { colors, radius, shadow } from '@/theme';
 export interface PillOption<T extends string> {
   value: T;
   label: string;
+  /**
+   * Shown, but not choosable — a city we do not serve yet, a format this sport does not
+   * have. Visible rather than hidden, so the answer to "why isn't Karachi here" is on the
+   * screen instead of being a support message.
+   */
+  disabled?: boolean;
 }
 
 export interface PillGroupProps<T extends string> {
@@ -43,20 +49,26 @@ export function PillGroup<T extends string>({
     <View style={styles.group} testID={testID}>
       {options.map((option) => {
         const active = selected(option.value);
+        const off = option.disabled === true;
         return (
           <PressableScale
             key={option.value}
             onPress={() => onChange(option.value)}
+            disabled={off}
             accessibilityRole={multiple ? 'checkbox' : 'radio'}
-            accessibilityState={{ selected: active, checked: active }}
+            accessibilityState={{ selected: active, checked: active, disabled: off }}
             accessibilityLabel={option.label}
             style={[
               styles.pill,
               variant === 'floating' && styles.pillFloating,
               active && styles.pillActive,
+              off && styles.pillDisabled,
             ]}
           >
-            <Text variant="metaStrong" color={active ? colors.textOnOrange : colors.orangeDeep}>
+            <Text
+              variant="metaStrong"
+              color={off ? colors.textSecondary : active ? colors.textOnOrange : colors.orangeDeep}
+            >
               {option.label}
             </Text>
           </PressableScale>
@@ -68,6 +80,8 @@ export function PillGroup<T extends string>({
 
 const styles = StyleSheet.create({
   group: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+  // Grey rather than a faded orange: the wash at low opacity still reads as tappable.
+  pillDisabled: { backgroundColor: colors.surfaceMuted },
   pill: {
     paddingHorizontal: 14,
     height: 34,

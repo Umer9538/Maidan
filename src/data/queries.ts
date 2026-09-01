@@ -10,17 +10,22 @@ import type { PaymentMode, PaymentProvider } from '@/domain/types';
 
 import type {
   CreateChallengeInput,
+  CreateCourtInput,
   CreateTeamInput,
   CreateOpenMatchInput,
+  CreateVenueInput,
   ManualBookingInput,
   MatchFilters,
   ReportScoreInput,
   VenueFilters,
+  VenueStatus,
 } from './api';
 import { useApi } from './provider';
 
 export const queryKeys = {
   venues: (filters?: VenueFilters) => ['venues', filters ?? {}] as const,
+  myVenues: () => ['my-venues'] as const,
+  venuesForReview: (status: VenueStatus) => ['venues-for-review', status] as const,
   venue: (venueId: string) => ['venue', venueId] as const,
   reviews: (venueId: string) => ['reviews', venueId] as const,
   courts: (venueId: string) => ['courts', venueId] as const,
@@ -365,4 +370,108 @@ export function usePlayers(playerIds: string[]) {
 export function useCurrentPlayer() {
   const api = useApi();
   return useQuery({ queryKey: queryKeys.currentPlayer(), queryFn: () => api.currentPlayer() });
+}
+
+
+// ------------------------------------------------------------------------ owner side --
+
+export function useMyVenues() {
+  const api = useApi();
+  return useQuery({ queryKey: queryKeys.myVenues(), queryFn: () => api.listMyVenues() });
+}
+
+/**
+ * Everything that changes a ground or its courts invalidates the same two lists.
+ *
+ * The venue's headline price and sport list are derived from its courts, so adding one
+ * changes the venue too — refetching only the courts would leave the owner looking at a
+ * "from" price that no longer matches what a player would be charged.
+ */
+function useVenueMutation<TInput, TResult>(mutationFn: (input: TInput) => Promise<TResult>) {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn,
+    onSuccess: () => {
+      void client.invalidateQueries({ queryKey: queryKeys.myVenues() });
+      void client.invalidateQueries({ queryKey: ['courts'] });
+      void client.invalidateQueries({ queryKey: ['venues'] });
+    },
+  });
+}
+
+export function useCreateVenue() {
+  const api = useApi();
+  return useVenueMutation((input: CreateVenueInput) => api.createVenue(input));
+}
+
+export function useUpdateVenue() {
+  const api = useApi();
+  return useVenueMutation((input: { venueId: string; patch: Partial<CreateVenueInput> }) =>
+    api.updateVenue(input.venueId, input.patch),
+  );
+}
+
+export function useAddCourt() {
+  const api = useApi();
+  return useVenueMutation((input: { venueId: string; court: CreateCourtInput }) =>
+    api.addCourt(input.venueId, input.court),
+  );
+}
+
+export function useUpdateCourt() {
+  const api = useApi();
+  return useVenueMutation((input: { courtId: string; patch: Partial<CreateCourtInput> }) =>
+    api.updateCourt(input.courtId, input.patch),
+  );
+}
+
+export function useRemoveCourt() {
+  const api = useApi();
+  return useVenueMutation((courtId: string) => api.removeCourt(courtId));
+}
+
+export function usePublishVenue() {
+  const api = useApi();
+  return useVenueMutation((venueId: string) => api.publishVenue(venueId));
+}
+
+export function useUnpublishVenue() {
+  const api = useApi();
+  return useVenueMutation((venueId: string) => api.unpublishVenue(venueId));
+}
+
+// ----------------------------------------------------------------------------- admin --
+
+export function useVenuesForReview(status: VenueStatus) {
+  const api = useApi();
+  return useQuery({
+    queryKey: queryKeys.venuesForReview(status),
+    queryFn: () => api.listVenuesForReview(status),
+  });
+}
+
+/** Approving or rejecting moves a venue between queues, so every queue is invalidated. */
+function useReviewMutation<TInput>(mutationFn: (input: TInput) => Promise<unknown>) {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn,
+    onSuccess: () => {
+      void client.invalidateQueries({ queryKey: ['venues-for-review'] });
+      void client.invalidateQueries({ queryKey: queryKeys.myVenues() });
+    },
+  });
+}
+
+export function useApproveVenue() {
+  const api = useApi();
+  return useReviewMutation((input: { venueId: string; note?: string }) =>
+    api.approveVenue(input.venueId, input.note),
+  );
+}
+
+export function useRejectVenue() {
+  const api = useApi();
+  return useReviewMutation((input: { venueId: string; note: string }) =>
+    api.rejectVenue(input.venueId, input.note),
+  );
 }

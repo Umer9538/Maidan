@@ -230,6 +230,24 @@ export function createHttpApi({
     currentPlayer: () => request<CurrentPlayer>('GET', '/players/me'),
     updateProfile: (input) => request<CurrentPlayer>('PATCH', '/players/me', input),
 
+    // Owner side. Every one of these is refused unless the caller owns the ground.
+    listMyVenues: () => request<Venue[]>('GET', '/venues/mine'),
+    createVenue: (input) => request<Venue>('POST', '/venues', input),
+    updateVenue: (venueId, input) => request<Venue>('PATCH', `/venues/${venueId}`, input),
+    addCourt: (venueId, input) => request<Court>('POST', `/venues/${venueId}/courts`, input),
+    updateCourt: (courtId, input) => request<Court>('PATCH', `/courts/${courtId}`, input),
+    removeCourt: (courtId) => request<void>('DELETE', `/courts/${courtId}`),
+    publishVenue: (venueId) => request<Venue>('POST', `/venues/${venueId}/publish`),
+    unpublishVenue: (venueId) => request<Venue>('POST', `/venues/${venueId}/unpublish`),
+
+    // Admin. A non-admin gets `not_found`, so these do not announce themselves.
+    listVenuesForReview: (status) =>
+      request<Venue[]>('GET', `/admin/venues${query({ status })}`),
+    approveVenue: (venueId, note) =>
+      request<Venue>('POST', `/admin/venues/${venueId}/approve`, { note }),
+    rejectVenue: (venueId, note) =>
+      request<Venue>('POST', `/admin/venues/${venueId}/reject`, { note }),
+
     // Auth. These are the only calls that work without a token, which is why the server
     // lists their paths as public — everything else 401s before it reaches a handler.
     register: (input) => request<AuthSession>('POST', '/auth/register', input),

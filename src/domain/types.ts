@@ -290,6 +290,8 @@ export interface CurrentPlayer extends Player {
   sports: Sport[];
   city: City | null;
   ownedVenueIds: string[];
+  /** Approves venue listings. One privilege, so a flag rather than a role. */
+  isAdmin: boolean;
 }
 
 export type ThreadKind = 'match' | 'team' | 'venue';

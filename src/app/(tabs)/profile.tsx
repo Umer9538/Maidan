@@ -92,13 +92,28 @@ export default function ProfileScreen() {
 
         <Divider style={styles.divider} />
 
-        {/* Only an account that manages a ground sees the owner surface. */}
-        {(session?.ownedVenueIds.length ?? 0) > 0 ? (
+        {/*
+          Offered to everyone, not only to existing owners. It is how someone *becomes* one:
+          the launch plan is supply-first, and a ground owner who downloads the app has to
+          find their way to registering without being told a URL.
+        */}
+        <Link
+          icon="shield"
+          label={(session?.ownedVenueIds.length ?? 0) > 0 ? 'My grounds' : 'List your ground'}
+          detail={
+            (session?.ownedVenueIds.length ?? 0) > 0
+              ? `${session?.ownedVenueIds.length}`
+              : undefined
+          }
+          onPress={() => router.push('/owner/venues')}
+        />
+
+        {/* MAIDAN staff only. Nobody else is told it exists. */}
+        {player.data?.isAdmin ? (
           <Link
-            icon="shield"
-            label="Venue dashboard"
-            detail={`${session?.ownedVenueIds.length}`}
-            onPress={() => router.push('/owner/dashboard')}
+            icon="tick"
+            label="Venue review"
+            onPress={() => router.push('/admin/venues')}
           />
         ) : null}
         <Link icon="calendar" label="My schedule" onPress={() => router.push('/schedule')} />

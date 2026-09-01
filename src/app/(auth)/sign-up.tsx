@@ -75,6 +75,12 @@ export default function SignUpScreen() {
       setFailure('An account already uses that email. Sign in instead.');
       return;
     }
+    // A dropped connection is not a rejected account. "Try again" is right for both, but
+    // only one of them means the details were wrong, and the wording should not imply it.
+    if (error === 'network') {
+      setFailure('Could not reach Maidan. Check your connection and try again.');
+      return;
+    }
     if (error) {
       setFailure('We could not create your account. Try again.');
       return;

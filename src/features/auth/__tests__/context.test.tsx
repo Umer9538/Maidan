@@ -28,6 +28,7 @@ const ACCOUNT: CurrentPlayer = {
   sports: ['padel', 'futsal'],
   city: 'lahore',
   ownedVenueIds: [],
+  isAdmin: false,
 };
 
 function apiWith(overrides: Partial<MaidanApi>): MaidanApi {
