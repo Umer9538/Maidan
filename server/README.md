@@ -16,6 +16,10 @@ npm test                              # unit + service tests (needs the database
 npm run smoke                         # 49 end-to-end checks against the running server
 ```
 
+`npm run smoke` books real slots and does not clean up after itself, so run `npm run seed`
+before each pass. A second run against the same data exhausts the free evening slots and
+fails on a missing one rather than on anything being wrong.
+
 `AUTH_SECRET` signs access tokens. Development generates a throwaway and warns; production
 refuses to start without one, because a signing key compiled into a shipped binary is the
 same as no signature at all.
