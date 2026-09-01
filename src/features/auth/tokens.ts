@@ -82,3 +82,79 @@ export async function clearTokens(): Promise<void> {
     // Nothing useful to do. The tokens are already unusable by the time this is called.
   }
 }
+
+/**
+ * The token side of the HTTP client's contract.
+ *
+ * Refresh is a bare `fetch` rather than a call back through `MaidanApi`, and deliberately
+ * so: the api is built *with* this provider, and routing refresh through it would close a
+ * loop between the two. Refresh is a transport concern anyway — it renews the credential
+ * the transport carries, and no screen ever asks for it.
+ */
+export interface SessionLostListener {
+  (): void;
+}
+
+const listeners = new Set<SessionLostListener>();
+
+/**
+ * Called when a session cannot be recovered — the refresh token is expired, revoked, or was
+ * burned because the server saw it twice. The auth context listens so the player lands on
+ * sign-in rather than on a screen that has quietly stopped loading.
+ */
+export function onSessionLost(listener: SessionLostListener): () => void {
+  listeners.add(listener);
+  return () => listeners.delete(listener);
+}
+
+function announceSessionLost(): void {
+  for (const listener of listeners) listener();
+}
+
+export function createTokenProvider(baseUrl: string) {
+  return {
+    async getAccessToken(): Promise<string | null> {
+      const pair = await readTokens();
+      if (!pair) return null;
+      // Expired tokens are still handed over. The 401 that follows is what triggers the
+      // shared refresh, and returning null here would instead send an unauthenticated
+      // request that the server cannot tell apart from a signed-out one.
+      return pair.accessToken;
+    },
+
+    async refresh(): Promise<string | null> {
+      const pair = await readTokens();
+      if (!pair) return null;
+
+      try {
+        const response = await fetch(`${baseUrl}/auth/refresh`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ refreshToken: pair.refreshToken }),
+        });
+
+        if (!response.ok) {
+          // The session is over rather than merely stale, so the stored pair is worse than
+          // useless: keeping it would make every launch retry a token the server has
+          // already refused.
+          await clearTokens();
+          return null;
+        }
+
+        const session = (await response.json()) as {
+          accessToken: string;
+          refreshToken: string;
+          expiresIn: number;
+        };
+        await writeTokens(toTokenPair(session));
+        return session.accessToken;
+      } catch {
+        // A dropped connection is not a lost session. The tokens stay; the request fails
+        // as a network error and the next attempt can succeed.
+        return null;
+      }
+    },
+
+    onSignedOut: announceSessionLost,
+  };
+}

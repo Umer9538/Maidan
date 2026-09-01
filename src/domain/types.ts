@@ -259,6 +259,26 @@ export interface Player {
   skillBySport: Partial<Record<Sport, SkillLevel>>;
 }
 
+/**
+ * The signed-in player's own record.
+ *
+ * Wider than `Player`, which is what everyone else is allowed to see. The extra fields are
+ * account state rather than profile: the contact details sign-in was proved against, the
+ * setup choices, and the venues this account manages.
+ *
+ * `ownedVenueIds` is derived from venue ownership on the server rather than stored on the
+ * player, so claiming or losing a ground takes effect without a second write that could
+ * disagree with the first.
+ */
+export interface CurrentPlayer extends Player {
+  email: string | null;
+  phone: string | null;
+  /** Chosen during setup. Empty means setup is unfinished. */
+  sports: Sport[];
+  city: City | null;
+  ownedVenueIds: string[];
+}
+
 export type ThreadKind = 'match' | 'team' | 'venue';
 
 export interface ChatThread {

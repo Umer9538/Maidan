@@ -13,6 +13,7 @@ import type {
   Challenge,
   ChatThread,
   Court,
+  CurrentPlayer,
   Message,
   Notification,
   OpenMatch,
@@ -25,6 +26,7 @@ import type {
 
 import {
   ApiError,
+  type AuthSession,
   type ChallengeResult,
   type CreateBookingInput,
   type CreateChallengeInput,
@@ -33,6 +35,7 @@ import {
   type MaidanApi,
   type ManualBookingInput,
   type MatchFilters,
+  type OtpChallenge,
   type ReportScoreInput,
   type SlotHold,
   type SubmitReviewInput,
@@ -224,6 +227,16 @@ export function createHttpApi({
     listPlayers: (playerIds) =>
       request<Player[]>('GET', `/players${query({ ids: playerIds.join(',') })}`),
     searchPlayers: (search) => request<Player[]>('GET', `/players${query({ query: search })}`),
-    currentPlayer: () => request<Player>('GET', '/players/me'),
+    currentPlayer: () => request<CurrentPlayer>('GET', '/players/me'),
+    updateProfile: (input) => request<CurrentPlayer>('PATCH', '/players/me', input),
+
+    // Auth. These are the only calls that work without a token, which is why the server
+    // lists their paths as public — everything else 401s before it reaches a handler.
+    register: (input) => request<AuthSession>('POST', '/auth/register', input),
+    login: (email, password) => request<AuthSession>('POST', '/auth/login', { email, password }),
+    requestOtp: (phone) => request<OtpChallenge>('POST', '/auth/otp', { phone }),
+    verifyOtp: (phone, code, fullName) =>
+      request<AuthSession>('POST', '/auth/otp/verify', { phone, code, fullName }),
+    signOut: (refreshToken) => request<void>('POST', '/auth/logout', { refreshToken }),
   };
 }

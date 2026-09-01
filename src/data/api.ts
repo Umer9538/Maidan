@@ -14,6 +14,7 @@ import type {
   ChatThread,
   City,
   Court,
+  CurrentPlayer,
   GenderPreference,
   MatchFormat,
   Message,
@@ -142,6 +143,35 @@ export interface CreateTeamInput {
 }
 
 /** Errors the UI must distinguish, rather than showing one generic failure. */
+export interface AuthSession {
+  accessToken: string;
+  refreshToken: string;
+  /** Seconds until the access token expires, counted from when the server replied. */
+  expiresIn: number;
+  playerId: string;
+}
+
+export interface RegisterInput {
+  fullName: string;
+  email: string;
+  phone: string;
+  password: string;
+}
+
+export interface OtpChallenge {
+  /** Normalised to +92XXXXXXXXXX, so the client shows the number the code actually went to. */
+  phone: string;
+  expiresInSeconds: number;
+  /** Development only. There is no SMS provider, so without this the flow cannot complete. */
+  devCode?: string;
+}
+
+export interface UpdateProfileInput {
+  fullName?: string;
+  sports?: Sport[];
+  city?: City | null;
+}
+
 export type ApiErrorCode =
   | 'slot_taken'
   | 'hold_expired'
@@ -270,5 +300,24 @@ export interface MaidanApi {
   listPlayers(playerIds: string[]): Promise<Player[]>;
   /** Players matching a name fragment, for the invite sheet. Empty query returns everyone. */
   searchPlayers(query: string): Promise<Player[]>;
-  currentPlayer(): Promise<Player>;
+  /** The signed-in player's own record, including setup state and any venues they manage. */
+  currentPlayer(): Promise<CurrentPlayer>;
+
+  /** Saves the setup choices and the profile fields that share a screen with them. */
+  updateProfile(input: UpdateProfileInput): Promise<CurrentPlayer>;
+
+  // ------------------------------------------------------------------------------ auth --
+  //
+  // Auth sits on the same interface as everything else so the app never asks which backend
+  // it has. The mock signs people in against its own memory; the HTTP client calls the
+  // server. `AuthProvider` calls these and cannot tell the difference — which is what keeps
+  // the whole app runnable with no network.
+
+  register(input: RegisterInput): Promise<AuthSession>;
+  login(email: string, password: string): Promise<AuthSession>;
+  /** Sends a code. Outside production the code comes back on the response, since no SMS is sent. */
+  requestOtp(phone: string): Promise<OtpChallenge>;
+  verifyOtp(phone: string, code: string, fullName?: string): Promise<AuthSession>;
+  /** Ends the session server-side. Local state is cleared whether or not this succeeds. */
+  signOut(refreshToken: string): Promise<void>;
 }

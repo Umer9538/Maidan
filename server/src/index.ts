@@ -50,6 +50,7 @@ import {
   toBooking,
   toChallenge,
   toCourt,
+  toCurrentPlayer,
   toMessage,
   toNotification,
   toOpenMatch,
@@ -749,9 +750,49 @@ app.get('/players', route(async (req, res) => {
 }));
 
 app.get('/players/me', route(async (req, res) => {
-  const { rows } = await pool.query('SELECT * FROM players WHERE id = $1', [currentUser(req)]);
+  const playerId = currentUser(req);
+  const { rows } = await pool.query('SELECT * FROM players WHERE id = $1', [playerId]);
   if (rows.length === 0) throw new ApiError('not_found', 'No such player');
-  res.json(toPlayer(rows[0]));
+
+  // Ownership is read from the venues, not from a column on the player. One answer to the
+  // question means the two cannot drift apart.
+  const { rows: owned } = await pool.query<{ id: string }>(
+    'SELECT id FROM venues WHERE owner_id = $1 ORDER BY name',
+    [playerId],
+  );
+
+  res.json(toCurrentPlayer(rows[0], owned.map((venue) => venue.id)));
+}));
+
+/**
+ * Saves the setup choices, and the profile edits that share the screen with them.
+ *
+ * Only these fields. A PATCH that took whatever it was given would let a caller set their
+ * own reliability, which is the number the whole no-show system rests on.
+ */
+app.patch('/players/me', route(async (req, res) => {
+  const playerId = currentUser(req);
+  const sports = Array.isArray(req.body?.sports) ? (req.body.sports as string[]) : undefined;
+  const city = typeof req.body?.city === 'string' ? req.body.city : undefined;
+  const fullName = typeof req.body?.fullName === 'string' ? req.body.fullName.trim() : undefined;
+
+  const { rows } = await pool.query(
+    `UPDATE players
+        SET sports    = COALESCE($2, sports),
+            city      = COALESCE($3, city),
+            full_name = COALESCE($4, full_name)
+      WHERE id = $1
+      RETURNING *`,
+    [playerId, sports ?? null, city ?? null, fullName || null],
+  );
+  if (rows.length === 0) throw new ApiError('not_found', 'No such player');
+
+  const { rows: owned } = await pool.query<{ id: string }>(
+    'SELECT id FROM venues WHERE owner_id = $1 ORDER BY name',
+    [playerId],
+  );
+
+  res.json(toCurrentPlayer(rows[0], owned.map((venue) => venue.id)));
 }));
 
 app.get('/players/:playerId', route(async (req, res) => {

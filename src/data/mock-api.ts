@@ -11,6 +11,7 @@ import type {
   Booking,
   Challenge,
   ChatThread,
+  CurrentPlayer,
   Court,
   Message,
   Notification,
@@ -27,6 +28,7 @@ import { calculatePayment, resolveSlotPrice } from '@/lib/pricing';
 
 import {
   ApiError,
+  type AuthSession,
   type CreateBookingInput,
   type MaidanApi,
   type MatchFilters,
@@ -107,6 +109,33 @@ export interface MockApiOptions {
   seedBookings?: boolean;
 }
 
+/**
+ * The account the mock starts signed in as.
+ *
+ * Setup is already done, because the mock exists so the whole app can be opened and used
+ * without a backend — landing every launch on "what do you play?" would defeat that. The
+ * auth calls below reset it to unfinished when someone registers, so the setup flow can
+ * still be exercised deliberately.
+ */
+function initialAccount(): CurrentPlayer {
+  const me = seed.players.find((player) => player.id === seed.CURRENT_USER_ID);
+  return {
+    id: seed.CURRENT_USER_ID,
+    name: me?.name ?? 'Player',
+    avatarUrl: me?.avatarUrl ?? null,
+    reliability: me?.reliability ?? 100,
+    gamesPlayed: me?.gamesPlayed ?? 0,
+    skillBySport: me?.skillBySport ?? {},
+    email: 'umer@maidan.pk',
+    phone: '+923001234567',
+    sports: ['padel', 'futsal', 'cricket'],
+    city: 'lahore',
+    // A player account. The owner dashboard is reached in development through the gate
+    // bypass, not by pretending every mock user runs a ground.
+    ownedVenueIds: [],
+  };
+}
+
 export function createMockApi(
   nowOrOptions: (() => Date) | MockApiOptions = {},
 ): MaidanApi & { reset(): void } {
@@ -122,6 +151,17 @@ export function createMockApi(
       : new Promise((resolve) => setTimeout(() => resolve(value), latencyMs));
 
   let state = initialState(seedBookings, now);
+
+  /**
+   * The signed-in account.
+   *
+   * Held apart from `state`, which `reset()` rebuilds between tests. A test that resets the
+   * data should not find itself signed out as a side effect.
+   */
+  let account: CurrentPlayer = initialAccount();
+
+  /** `delay` with nothing to carry, for the calls that return a value built in place. */
+  const latency = () => delay(undefined);
 
   const liveHolds = () => state.holds.filter((hold) => new Date(hold.expiresAt) > now());
 
@@ -674,7 +714,74 @@ export function createMockApi(
     },
 
     async currentPlayer() {
-      return this.getPlayer(seed.CURRENT_USER_ID) as Promise<Player>;
+      await latency();
+      return { ...account };
     },
+
+    async updateProfile(input) {
+      await latency();
+      if (input.fullName !== undefined) account.name = input.fullName.trim();
+      if (input.sports !== undefined) account.sports = input.sports;
+      if (input.city !== undefined) account.city = input.city;
+      return { ...account };
+    },
+
+    /*
+     * Auth against memory.
+     *
+     * The mock accepts any well-formed credentials rather than checking them, because its
+     * job is to run the app with no network — not to be a second implementation of the
+     * security rules, which would be a second place for them to be wrong. What it does
+     * reproduce faithfully is the *shape*: a session with both tokens, and an account that
+     * starts with no sports and no city so the setup gate behaves as it does in production.
+     */
+    async register(input) {
+      await latency();
+      account = {
+        ...account,
+        name: input.fullName.trim(),
+        email: input.email.trim().toLowerCase(),
+        phone: input.phone,
+        sports: [],
+        city: null,
+      };
+      return mockSession();
+    },
+
+    async login(email) {
+      await latency();
+      account = { ...account, email: email.trim().toLowerCase() };
+      return mockSession();
+    },
+
+    async requestOtp(phone) {
+      await latency();
+      return { phone, expiresInSeconds: 300, devCode: '000000' };
+    },
+
+    async verifyOtp(phone, _code, fullName) {
+      await latency();
+      account = { ...account, phone, name: fullName?.trim() || account.name };
+      return mockSession();
+    },
+
+    async signOut() {
+      await latency();
+    },
+  };
+}
+
+/**
+ * A session shaped like the server's, with tokens that are obviously not real.
+ *
+ * Deliberately not random: a token that looks plausible invites someone to wonder whether
+ * the mock is doing cryptography, and it is not.
+ */
+function mockSession(): AuthSession {
+  return {
+    accessToken: 'mock-access-token',
+    refreshToken: 'mock-refresh-token',
+    expiresIn: 15 * 60,
+    playerId: seed.CURRENT_USER_ID,
   };
 }

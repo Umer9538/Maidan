@@ -12,12 +12,30 @@
  * well-formed pair, `verify` accepts any four digits. Their shapes are what the real
  * endpoints will slot into, and no password is ever persisted.
  */
-import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
 import type { ReactNode } from 'react';
 
+import { ApiError, type AuthSession } from '@/data/api';
+import { useApi } from '@/data/provider';
+import type { City, CurrentPlayer, Sport } from '@/domain/types';
 import { skipGates } from '@/features/dev-gates';
 
 import { clearSession, readSession, writeSession, type StoredSession } from './storage';
+import {
+  clearTokens,
+  onSessionLost,
+  readTokens,
+  toTokenPair,
+  writeTokens,
+} from './tokens';
 import { isValidEmail, isValidPassword, normalisePhone } from './validation';
 
 export type AuthStatus =
@@ -45,7 +63,6 @@ interface AuthValue {
   pendingPhone: string | null;
   signIn: (email: string, password: string) => Promise<AuthError | null>;
   signUp: (input: SignUpInput) => Promise<AuthError | null>;
-  signInWithGoogle: () => Promise<AuthError | null>;
   requestPasswordReset: (email: string) => Promise<AuthError | null>;
   /** Resolves true when the code is accepted. */
   verify: (code: string) => Promise<boolean>;
@@ -85,26 +102,26 @@ export function AuthProvider({
   /** Overridden in tests to skip the storage read. */
   initialSession?: StoredSession | null;
 }) {
-  const seed = initialSession ?? (skipGates ? DEV_SESSION : undefined);
+  const api = useApi();
+  /*
+   * `??` would be wrong here. `initialSession` is typed `StoredSession | null`, so `null`
+   * is a value — "start signed out" — not an absence, and coalescing on it would fall
+   * through to the dev session or to `loading` and never resolve. Only `undefined` means
+   * "not specified".
+   */
+  const seed = initialSession !== undefined ? initialSession : skipGates ? DEV_SESSION : undefined;
   const [status, setStatus] = useState<AuthStatus>(
     seed === undefined ? 'loading' : resolveStatus(seed),
   );
   const [session, setSession] = useState<StoredSession | null>(seed ?? null);
   const [pendingPhone, setPendingPhone] = useState<string | null>(null);
 
-  useEffect(() => {
-    if (initialSession !== undefined || skipGates) return;
-
-    let active = true;
-    readSession().then((stored) => {
-      if (!active) return;
-      setSession(stored);
-      setStatus(resolveStatus(stored));
-    });
-    return () => {
-      active = false;
-    };
-  }, [initialSession]);
+  /*
+   * `signOut` is declared below, after the calls it depends on. A ref lets the listener
+   * above reach the current one without the subscription tearing down and re-establishing
+   * on every render.
+   */
+  const signOutRef = useRef<() => void>(() => {});
 
   const establish = useCallback((next: StoredSession) => {
     setSession(next);
@@ -112,24 +129,73 @@ export function AuthProvider({
     void writeSession(next);
   }, []);
 
+  /**
+   * Takes a session the server just issued: stores the tokens, then reads the account back
+   * through the api so the profile comes from one place rather than being assembled from
+   * whatever the sign-in request happened to carry.
+   */
+  const adopt = useCallback(
+    async (issued: AuthSession) => {
+      await writeTokens(toTokenPair(issued));
+      const me = await api.currentPlayer();
+      establish(toStoredSession(me));
+    },
+    [api, establish],
+  );
+
+  /*
+   * The session ending underneath the app — a refresh token expired, revoked, or burned
+   * because the server saw it twice. Without this the player sits on a screen that has
+   * quietly stopped loading and has no way to understand why.
+   */
+  useEffect(() => onSessionLost(() => signOutRef.current()), []);
+
+  useEffect(() => {
+    if (initialSession !== undefined || skipGates) return;
+
+    let active = true;
+
+    void (async () => {
+      const stored = await readSession();
+      if (!active) return;
+
+      // What the device remembers, shown straight away: the app opens on the last known
+      // state instead of a spinner while the network is asked.
+      setSession(stored);
+      setStatus(resolveStatus(stored));
+
+      const pair = await readTokens();
+      if (!pair || !active) return;
+
+      try {
+        const me = await api.currentPlayer();
+        if (active) establish(toStoredSession(me));
+      } catch {
+        // Offline, or the session is over. The first is temporary and the stored session
+        // stands; the second arrives through `onSessionLost` instead.
+      }
+    })();
+
+    return () => {
+      active = false;
+    };
+  }, [api, establish, initialSession]);
+
   const signIn = useCallback<AuthValue['signIn']>(
     async (email, password) => {
       if (!isValidEmail(email) || !isValidPassword(password)) return 'invalid_credentials';
 
-      // A returning player already has their sports and city; the stub keeps whatever the
-      // device remembers so signing back in does not repeat setup.
-      establish({
-        id: session?.id ?? 'player-self',
-        fullName: session?.fullName ?? 'Player',
-        email: email.trim(),
-        phone: session?.phone ?? '',
-        sports: session?.sports ?? [],
-        city: session?.city ?? null,
-        ownedVenueIds: session?.ownedVenueIds ?? [],
-      });
-      return null;
+      try {
+        // The account comes back from the server, not from what this device remembers. A
+        // returning player on a new handset gets their sports and city with it, which is
+        // what stops them being walked through setup a second time.
+        await adopt(await api.login(email.trim(), password));
+        return null;
+      } catch (error) {
+        return toAuthError(error);
+      }
     },
-    [establish, session],
+    [adopt, api],
   );
 
   const signUp = useCallback<AuthValue['signUp']>(
@@ -139,32 +205,23 @@ export function AuthProvider({
 
       const international = `+92${normalisePhone(phone)}`;
       setPendingPhone(international);
-      establish({
-        id: 'player-self',
-        fullName: fullName.trim(),
-        email: email.trim(),
-        phone: international,
-        sports: [],
-        city: null,
-        ownedVenueIds: [],
-      });
-      return null;
-    },
-    [establish],
-  );
 
-  const signInWithGoogle = useCallback<AuthValue['signInWithGoogle']>(async () => {
-    establish({
-      id: 'player-self',
-      fullName: session?.fullName ?? 'Player',
-      email: session?.email ?? '',
-      phone: session?.phone ?? '',
-      sports: session?.sports ?? [],
-      city: session?.city ?? null,
-      ownedVenueIds: session?.ownedVenueIds ?? [],
-    });
-    return null;
-  }, [establish, session]);
+      try {
+        await adopt(
+          await api.register({
+            fullName: fullName.trim(),
+            email: email.trim(),
+            phone: international,
+            password,
+          }),
+        );
+        return null;
+      } catch (error) {
+        return toAuthError(error);
+      }
+    },
+    [adopt, api],
+  );
 
   const requestPasswordReset = useCallback<AuthValue['requestPasswordReset']>(async (email) => {
     return isValidEmail(email) ? null : 'invalid_credentials';
@@ -175,17 +232,26 @@ export function AuthProvider({
   const completeSetup = useCallback(
     (sports: string[], city: string) => {
       if (!session) return;
+      // Written locally first so the gate opens on the tap rather than on the round trip.
+      // The server is still the record: a failure here leaves the phone ahead of it, and
+      // the next `currentPlayer` read corrects the phone rather than the other way round.
       establish({ ...session, sports, city });
+      void api
+        .updateProfile({ sports: sports as Sport[], city: city as City })
+        .catch(() => undefined);
     },
-    [establish, session],
+    [api, establish, session],
   );
 
   const updateProfile = useCallback<AuthValue['updateProfile']>(
     (patch) => {
       if (!session) return;
       establish({ ...session, ...patch });
+      if (patch.fullName !== undefined) {
+        void api.updateProfile({ fullName: patch.fullName }).catch(() => undefined);
+      }
     },
-    [establish, session],
+    [api, establish, session],
   );
 
   const signOut = useCallback(() => {
@@ -193,7 +259,17 @@ export function AuthProvider({
     setPendingPhone(null);
     setStatus('signed_out');
     void clearSession();
-  }, []);
+
+    // Local state is cleared first and unconditionally. Ending the session on the server is
+    // the right thing to do and it is allowed to fail — a player on a dead connection who
+    // taps sign out must still be signed out.
+    void readTokens().then((pair) => {
+      void clearTokens();
+      if (pair) void api.signOut(pair.refreshToken).catch(() => undefined);
+    });
+  }, [api]);
+
+  signOutRef.current = signOut;
 
   const value = useMemo<AuthValue>(
     () => ({
@@ -202,7 +278,6 @@ export function AuthProvider({
       pendingPhone: pendingPhone ?? session?.phone ?? null,
       signIn,
       signUp,
-      signInWithGoogle,
       requestPasswordReset,
       verify,
       completeSetup,
@@ -215,7 +290,6 @@ export function AuthProvider({
       pendingPhone,
       signIn,
       signUp,
-      signInWithGoogle,
       requestPasswordReset,
       verify,
       completeSetup,
@@ -225,6 +299,33 @@ export function AuthProvider({
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
+}
+
+/** `CurrentPlayer` is what the server calls an account; `StoredSession` is what the app does. */
+function toStoredSession(me: CurrentPlayer): StoredSession {
+  return {
+    id: me.id,
+    fullName: me.name,
+    email: me.email ?? '',
+    phone: me.phone ?? '',
+    sports: me.sports,
+    city: me.city,
+    ownedVenueIds: me.ownedVenueIds,
+  };
+}
+
+/**
+ * Server codes to the ones the sign-in screens already show.
+ *
+ * A network failure is deliberately not `invalid_credentials`: telling someone on a dropped
+ * connection that their password is wrong sends them to reset a password that was fine.
+ */
+function toAuthError(error: unknown): AuthError {
+  if (error instanceof ApiError) {
+    if (error.code === 'already_registered') return 'email_taken';
+    if (error.code === 'network') return 'network';
+  }
+  return 'invalid_credentials';
 }
 
 function resolveStatus(session: StoredSession | null): AuthStatus {

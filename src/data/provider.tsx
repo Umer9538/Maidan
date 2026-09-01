@@ -10,6 +10,8 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { createContext, useContext, useMemo, type ReactNode } from 'react';
 
 import { ApiError, type MaidanApi } from './api';
+import { createTokenProvider } from '@/features/auth/tokens';
+
 import { createHttpApi, type TokenProvider } from './http-api';
 import { createMockApi } from './mock-api';
 
@@ -26,7 +28,8 @@ import { createMockApi } from './mock-api';
 export function resolveApi(tokens?: TokenProvider): MaidanApi {
   const baseUrl = process.env.EXPO_PUBLIC_API_URL;
   if (baseUrl) {
-    return createHttpApi({ baseUrl: baseUrl.replace(/\/$/, ''), tokens });
+    const url = baseUrl.replace(/\/$/, '');
+    return createHttpApi({ baseUrl: url, tokens: tokens ?? createTokenProvider(url) });
   }
   return createMockApi({ seedBookings: true });
 }

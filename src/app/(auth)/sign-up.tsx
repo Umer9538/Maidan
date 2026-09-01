@@ -36,7 +36,7 @@ import { colors, s, spacing } from '@/theme';
 export default function SignUpScreen() {
   const router = useRouter();
   const goBack = useGoBack('/(auth)/sign-in');
-  const { signUp, signInWithGoogle } = useAuth();
+  const { signUp } = useAuth();
 
   const [fullName, setFullName] = useState('');
   const [email, setEmail] = useState('');
@@ -181,7 +181,8 @@ export default function SignUpScreen() {
           <View style={styles.social}>
             <SocialRow
               providers={[
-                { name: 'google', label: 'Continue with Google', onPress: signInWithGoogle },
+                // See sign-in: no OAuth exchange yet, so there is nothing behind it.
+                { name: 'google', label: 'Continue with Google' },
               ]}
             />
           </View>

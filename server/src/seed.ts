@@ -50,8 +50,8 @@ async function main() {
 
   for (const [index, player] of [...seed.players, ...extraOwners].entries()) {
     await pool.query(
-      `INSERT INTO players (id, full_name, email, avatar_url, reliability, games_played, skill_by_sport, phone)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+      `INSERT INTO players (id, full_name, email, avatar_url, reliability, games_played, skill_by_sport, phone, sports, city)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
       [
         player.id,
         player.name,
@@ -65,6 +65,10 @@ async function main() {
         player.id === seed.CURRENT_USER_ID
           ? '+923001234567'
           : `+9230012${String(index).padStart(5, '0')}`,
+        // Setup already done, so a seeded account signs straight in rather than landing
+        // back on "what do you play?".
+        ['padel', 'futsal', 'cricket'],
+        'lahore',
       ],
     );
 

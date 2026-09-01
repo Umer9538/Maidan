@@ -25,7 +25,7 @@ import { colors, s, spacing } from '@/theme';
 
 export default function SignInScreen() {
   const router = useRouter();
-  const { signIn, signInWithGoogle, status } = useAuth();
+  const { signIn, status } = useAuth();
 
   // Signing in only proves who you are. A player returning on a new device still has no
   // sports and no city stored, so the session lands in `needs_setup` and the root guard
@@ -55,12 +55,6 @@ export default function SignInScreen() {
     setBusy(false);
     // The root layout's guard swaps the stack once the status flips; nothing to navigate.
     if (error) setFailure('That email and password do not match an account.');
-  };
-
-  const google = async () => {
-    setFailure(null);
-    const error = await signInWithGoogle();
-    if (error) setFailure('Google sign-in could not complete. Try again.');
   };
 
   return (
@@ -143,7 +137,14 @@ export default function SignInScreen() {
           />
 
           <View style={styles.social}>
-            <SocialRow providers={[{ name: 'google', label: 'Continue with Google', onPress: google }]} />
+            {/*
+              Google sign-in needs a real OAuth exchange — a Google client id, a token sent
+              to the server, and an account matched or created against it. Until that
+              exists the button cannot produce a session the server would accept, and
+              `SocialRow` drops a provider with nothing behind it rather than showing one
+              that signs someone into a state where every request is refused.
+            */}
+            <SocialRow providers={[{ name: 'google', label: 'Continue with Google' }]} />
           </View>
 
           <View style={styles.footer}>

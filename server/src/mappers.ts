@@ -9,6 +9,7 @@ import type {
   Challenge,
   ChatThread,
   Court,
+  CurrentPlayer,
   Message,
   Notification,
   OpenMatch,
@@ -28,6 +29,24 @@ export function toPlayer(row: Row): Player {
     reliability: row.reliability,
     gamesPlayed: row.games_played,
     skillBySport: row.skill_by_sport ?? {},
+  };
+}
+
+/**
+ * The caller's own record, with the account state `toPlayer` deliberately withholds.
+ *
+ * `ownedVenueIds` is passed in rather than read from the row: venue ownership lives on
+ * `venues.owner_id`, and duplicating it onto the player would create two answers to the
+ * same question that could disagree.
+ */
+export function toCurrentPlayer(row: Row, ownedVenueIds: string[]): CurrentPlayer {
+  return {
+    ...toPlayer(row),
+    email: row.email ?? null,
+    phone: row.phone ?? null,
+    sports: row.sports ?? [],
+    city: row.city ?? null,
+    ownedVenueIds,
   };
 }
 
