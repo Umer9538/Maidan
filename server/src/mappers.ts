@@ -69,6 +69,7 @@ export function toVenue(row: Row): Venue {
     reviewCount: row.review_count,
     playerCount: row.player_count,
     status: row.status,
+    reviewNote: row.review_note ?? null,
     cancellationPolicyId: 'standard',
   };
 }

@@ -29,6 +29,7 @@ import {
   verifyOtp,
 } from './auth-service.js';
 import {
+  assertAdmin,
   assertCanSeeBooking,
   assertCaptain,
   assertOwnsBooking,
@@ -227,6 +228,102 @@ app.get('/venues', route(async (req, res) => {
  * `GET /venues` only returns `live` ones, so without this an owner could create a venue and
  * then have no way to see it — it would be invisible to them until someone verified it.
  */
+// ------------------------------------------------------------------ venue approval --
+//
+// A ground owner describes their venue and its courts and then waits. Nothing they have
+// listed is bookable — not through the app and not at their own counter — until someone at
+// MAIDAN has looked at it. See `booking-service.loadCourt` for where that is enforced;
+// these endpoints only move the status.
+
+/** The review queue. Oldest first, because the one waiting longest is the one to do next. */
+app.get('/admin/venues', route(async (req, res) => {
+  await assertAdmin(currentUser(req));
+
+  const status = typeof req.query.status === 'string' ? req.query.status : 'pending';
+  const { rows } = await pool.query(
+    'SELECT * FROM venues WHERE status = $1 ORDER BY created_at',
+    [status],
+  );
+  res.json(rows.map(toVenue));
+}));
+
+app.post('/admin/venues/:venueId/approve', route(async (req, res) => {
+  const adminId = currentUser(req);
+  await assertAdmin(adminId);
+
+  // To `verified`, not straight to `live`. Approval says the ground is real; publishing
+  // says the owner is ready, and a venue approved before its courts are entered would
+  // otherwise appear in search with nothing to book.
+  const { rows } = await pool.query(
+    `UPDATE venues
+        SET status = 'verified', review_note = $2, reviewed_at = now(), reviewed_by = $3
+      WHERE id = $1 AND status IN ('pending', 'rejected')
+      RETURNING *`,
+    [req.params.venueId, typeof req.body?.note === 'string' ? req.body.note : null, adminId],
+  );
+  if (rows.length === 0) throw new ApiError('not_found', 'No venue awaiting review');
+  res.json(toVenue(rows[0]));
+}));
+
+app.post('/admin/venues/:venueId/reject', route(async (req, res) => {
+  const adminId = currentUser(req);
+  await assertAdmin(adminId);
+
+  // The note is required. "Rejected" with no reason leaves an owner with a dead listing
+  // and nothing to act on, and they will call someone to ask why.
+  const note = required(req.body?.note, 'note');
+
+  const { rows } = await pool.query(
+    `UPDATE venues
+        SET status = 'rejected', review_note = $2, reviewed_at = now(), reviewed_by = $3
+      WHERE id = $1 AND status <> 'live'
+      RETURNING *`,
+    [req.params.venueId, note, adminId],
+  );
+  if (rows.length === 0) throw new ApiError('not_found', 'No venue to reject');
+  res.json(toVenue(rows[0]));
+}));
+
+/**
+ * The owner switching their approved ground on.
+ *
+ * Requires a court. A live venue with nothing bookable is a search result that wastes
+ * everyone's time, and it is the owner's first impression of the marketplace working.
+ */
+app.post('/venues/:venueId/publish', route(async (req, res) => {
+  await assertOwnsVenue(req.params.venueId, currentUser(req));
+
+  const { rows: courts } = await pool.query<{ count: string }>(
+    'SELECT count(*) AS count FROM courts WHERE venue_id = $1',
+    [req.params.venueId],
+  );
+  if (Number(courts[0].count) === 0) {
+    throw new ApiError('validation', 'Add at least one court before going live.');
+  }
+
+  const { rows } = await pool.query(
+    `UPDATE venues SET status = 'live' WHERE id = $1 AND status IN ('verified', 'live')
+      RETURNING *`,
+    [req.params.venueId],
+  );
+  if (rows.length === 0) {
+    throw new ApiError('validation', 'This ground has not been approved yet.');
+  }
+  res.json(toVenue(rows[0]));
+}));
+
+/** Taking it off the board — for a refit, a closure, or a season. Bookings already made stand. */
+app.post('/venues/:venueId/unpublish', route(async (req, res) => {
+  await assertOwnsVenue(req.params.venueId, currentUser(req));
+
+  const { rows } = await pool.query(
+    `UPDATE venues SET status = 'verified' WHERE id = $1 AND status = 'live' RETURNING *`,
+    [req.params.venueId],
+  );
+  if (rows.length === 0) throw new ApiError('validation', 'This ground is not live.');
+  res.json(toVenue(rows[0]));
+}));
+
 app.get('/venues/mine', route(async (req, res) => {
   const { rows } = await pool.query('SELECT * FROM venues WHERE owner_id = $1 ORDER BY name', [
     currentUser(req),

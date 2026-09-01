@@ -81,6 +81,16 @@ async function main() {
     ]);
   }
 
+  /*
+   * One admin, so the approval queue can be worked in development.
+   *
+   * `player-self` is the app's own account, which means the same sign-in that opens the
+   * player app also opens the review queue. Fine for a seeded database that truncates
+   * itself on every run; in production admin is granted deliberately, one account at a
+   * time, and never by a script.
+   */
+  await pool.query('UPDATE players SET is_admin = true WHERE id = $1', [seed.CURRENT_USER_ID]);
+
   console.log(`venues: ${seed.venues.length}`);
   for (const venue of seed.venues) {
     await pool.query(

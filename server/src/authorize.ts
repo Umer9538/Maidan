@@ -78,6 +78,25 @@ export function currentUser(req: Request): string {
   return req.playerId;
 }
 
+/**
+ * The MAIDAN side of the desk.
+ *
+ * Read from the database on every call rather than carried in the token: a token lasts
+ * fifteen minutes, and someone whose admin rights are withdrawn should lose them now, not
+ * at their next refresh.
+ */
+export async function assertAdmin(playerId: string): Promise<void> {
+  const { rows } = await pool.query<{ is_admin: boolean }>(
+    'SELECT is_admin FROM players WHERE id = $1',
+    [playerId],
+  );
+  if (rows.length === 0 || !rows[0].is_admin) {
+    // `not_found`, so the admin endpoints do not announce their own existence to a player
+    // who goes looking for them.
+    throw new ApiError('not_found', 'No such record');
+  }
+}
+
 // ------------------------------------------------------------------------ assertions --
 
 /**

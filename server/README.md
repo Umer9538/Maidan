@@ -62,6 +62,42 @@ exactly this reason.
 same as knowing what is theirs. "Not yours" and "not found" give the same answer — a
 distinct one turns any id parameter into a probe for which records exist.
 
+## Venue onboarding
+
+An owner registers their ground and its courts and then waits. Until someone at MAIDAN
+approves it, **nothing they have listed is bookable** — not in the app, and not at their own
+counter.
+
+```
+pending   submitted, waiting on a human
+rejected  turned down, with a note saying what to fix
+verified  approved; the owner may publish once there is a court
+live      in search, and bookable
+```
+
+Hiding an unapproved venue from search was never enough on its own: its courts are still
+reachable by id, so slots could be listed and bookings taken against a ground nobody had
+confirmed exists. The status is checked in `booking-service.loadCourt` and
+`assertVenueLive`, which every read and every sale passes through — the owner's walk-in path
+included, because an owner should not be able to start trading on their own say-so.
+
+`verified` and `live` are separate on purpose. Approval says the ground is real; publishing
+says the owner is ready. Publishing needs at least one court, or the ground appears in
+search with nothing to book.
+
+Admin is a flag on the player, checked against the database on every call rather than
+carried in the token — someone whose rights are withdrawn loses them now, not at their next
+refresh. The seed grants it to `player-self`; in production it is granted deliberately, one
+account at a time, and never by a script.
+
+```
+GET  /admin/venues?status=pending      the review queue
+POST /admin/venues/:id/approve         -> verified
+POST /admin/venues/:id/reject          -> rejected, `note` required
+POST /venues/:id/publish               owner: -> live
+POST /venues/:id/unpublish             owner: -> verified, stops selling at once
+```
+
 ## The two things that must never break
 
 **Slot integrity.** `bookings_no_overlap` is a Postgres `EXCLUDE USING gist` constraint over

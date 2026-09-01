@@ -37,10 +37,51 @@ async function sweepHolds(db: Db | typeof pool): Promise<void> {
   await db.query('DELETE FROM slot_holds WHERE expires_at <= now()');
 }
 
+/**
+ * A court, and only if the ground it belongs to is open for business.
+ *
+ * Every path that reads or sells a slot comes through here, which is the point. Keeping an
+ * unapproved venue out of search was never enough on its own — its courts are still
+ * reachable by id, so slots could be listed and bookings taken against a ground nobody at
+ * MAIDAN had yet confirmed exists. The owner's own walk-in path runs through this too: an
+ * owner cannot start trading on their own say-so while the listing is still under review.
+ *
+ * The refusal is `not_found` rather than something more specific, because to anyone but the
+ * owner that court genuinely is not there. The owner learns the real reason from the status
+ * on their own venue, which `GET /venues/mine` returns.
+ */
 async function loadCourt(courtId: string) {
-  const { rows } = await pool.query('SELECT * FROM courts WHERE id = $1', [courtId]);
+  const { rows } = await pool.query(
+    `SELECT c.*, v.status AS venue_status
+       FROM courts c
+       JOIN venues v ON v.id = c.venue_id
+      WHERE c.id = $1`,
+    [courtId],
+  );
   if (rows.length === 0) throw new ApiError('not_found', `No court ${courtId}`);
+  if (rows[0].venue_status !== 'live') {
+    throw new ApiError('not_found', `No court ${courtId}`);
+  }
   return toCourt(rows[0]);
+}
+
+/**
+ * Same gate as `loadCourt`, for the paths that do not need the court itself.
+ *
+ * Runs inside the caller's transaction where there is one, so the check and the write it
+ * guards cannot be separated by a status change landing between them.
+ */
+async function assertVenueLive(db: Db | typeof pool, courtId: string): Promise<void> {
+  const { rows } = await db.query<{ status: string }>(
+    `SELECT v.status
+       FROM courts c
+       JOIN venues v ON v.id = c.venue_id
+      WHERE c.id = $1`,
+    [courtId],
+  );
+  if (rows.length === 0 || rows[0].status !== 'live') {
+    throw new ApiError('not_found', `No court ${courtId}`);
+  }
 }
 
 export async function listSlots(courtId: string, dayIso: string): Promise<Slot[]> {
@@ -95,6 +136,7 @@ export interface SlotHold {
 
 export async function holdSlot(courtId: string, startAt: string): Promise<SlotHold> {
   await sweepHolds(pool);
+  await assertVenueLive(pool, courtId);
 
   const taken = await pool.query(
     `SELECT 1 FROM bookings
@@ -152,6 +194,11 @@ export async function createBooking(input: CreateBookingInput): Promise<Booking>
       [input.holdId],
     );
     if (holds.length === 0) throw new ApiError('hold_expired', 'Your slot hold has expired.');
+
+    // Checked again at redemption, not only when the hold was taken. A venue can be
+    // unpublished in the five minutes between the two, and the check is inside this
+    // transaction so nothing can land between it and the insert below.
+    await assertVenueLive(db, holds[0].court_id);
 
     const hold = holds[0];
     if (new Date(hold.expires_at).getTime() <= Date.now()) {
@@ -228,6 +275,9 @@ export interface ManualBookingInput {
 export async function createManualBooking(input: ManualBookingInput): Promise<Booking> {
   return tx(async (db) => {
     await sweepHolds(db);
+    // The owner's own counter, held to the same rule: a listing under review is not open
+    // for business, however much its owner would like it to be.
+    await assertVenueLive(db, input.courtId);
 
     const held = await db.query(
       'SELECT 1 FROM slot_holds WHERE court_id = $1 AND start_at = $2 AND expires_at > now()',

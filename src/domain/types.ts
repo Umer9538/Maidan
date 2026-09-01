@@ -68,7 +68,20 @@ export interface Venue {
   rating: number | null;
   reviewCount: number;
   playerCount: number;
-  status: 'pending' | 'verified' | 'live';
+  /**
+   * Where the listing is in review.
+   *
+   * `pending` waits on MAIDAN; `rejected` carries a `reviewNote` saying what to fix;
+   * `verified` means approved and the owner may publish; `live` is bookable. Only `live`
+   * venues appear in search, and only their courts can be booked — at the counter as well
+   * as in the app.
+   */
+  status: 'pending' | 'rejected' | 'verified' | 'live';
+  /**
+   * Why a listing was rejected, or an approver's note. Shown to the owner, never to
+   * players. Optional because most venues never carry one.
+   */
+  reviewNote?: string | null;
   cancellationPolicyId: string;
 }
 
