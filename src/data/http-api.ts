@@ -40,10 +40,28 @@ import {
   type VenueFilters,
 } from './api';
 
+/**
+ * How the client gets a token and what it does when one stops working.
+ *
+ * Supplied rather than built in, so the store can be swapped in a test and so this module
+ * has no opinion about where a token is kept.
+ */
+export interface TokenProvider {
+  /** The current access token, or null when there is no session. */
+  getAccessToken: () => Promise<string | null>;
+  /**
+   * Trades the refresh token for a new access token, returning null if the session is
+   * over. Called at most once per expiry — see `refreshOnce` below.
+   */
+  refresh: () => Promise<string | null>;
+  /** Called when the session cannot be recovered, so the app can send the player to sign-in. */
+  onSignedOut?: () => void;
+}
+
 export interface HttpApiOptions {
   baseUrl: string;
-  /** Stands in for the auth token until phone + OTP is wired. */
-  userId?: string;
+  /** Omitted only in tests that never reach an authenticated route. */
+  tokens?: TokenProvider;
   /** Requests are abandoned after this, so a dead network fails fast rather than hanging. */
   timeoutMs?: number;
 }
@@ -52,18 +70,42 @@ const DEFAULT_TIMEOUT_MS = 12_000;
 
 export function createHttpApi({
   baseUrl,
-  userId = 'player-self',
+  tokens,
   timeoutMs = DEFAULT_TIMEOUT_MS,
 }: HttpApiOptions): MaidanApi {
-  async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
+  /**
+   * The in-flight refresh, shared by every request that finds itself unauthorised.
+   *
+   * This is not an optimisation. Refresh tokens rotate and the server treats a token
+   * presented twice as evidence that it leaked — it revokes the whole family. A screen
+   * that fires five queries on mount would, without this, hit five 401s, start five
+   * refreshes with the same token, and sign the player out for doing nothing wrong.
+   */
+  let refreshing: Promise<string | null> | null = null;
+
+  function refreshOnce(): Promise<string | null> {
+    refreshing ??= (tokens?.refresh() ?? Promise.resolve(null)).finally(() => {
+      refreshing = null;
+    });
+    return refreshing;
+  }
+
+  async function send(
+    method: string,
+    path: string,
+    body: unknown,
+    token: string | null,
+  ): Promise<Response> {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
 
-    let response: Response;
     try {
-      response = await fetch(`${baseUrl}${path}`, {
+      return await fetch(`${baseUrl}${path}`, {
         method,
-        headers: { 'content-type': 'application/json', 'x-user-id': userId },
+        headers: {
+          'content-type': 'application/json',
+          ...(token ? { authorization: `Bearer ${token}` } : {}),
+        },
         body: body === undefined ? undefined : JSON.stringify(body),
         signal: controller.signal,
       });
@@ -72,6 +114,23 @@ export function createHttpApi({
       throw new ApiError('network', 'Could not reach Maidan. Check your connection.');
     } finally {
       clearTimeout(timer);
+    }
+  }
+
+  async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
+    let response = await send(method, path, body, (await tokens?.getAccessToken()) ?? null);
+
+    if (response.status === 401 && tokens) {
+      // One retry, and only after a 401. Retrying blind would replay writes; the booking
+      // path guards that with an intent id, but nothing else does.
+      const renewed = await refreshOnce();
+      if (renewed) {
+        response = await send(method, path, body, renewed);
+      }
+      if (response.status === 401) {
+        tokens.onSignedOut?.();
+        throw new ApiError('unauthorized', 'Sign in to continue');
+      }
     }
 
     if (response.status === 204) return undefined as T;

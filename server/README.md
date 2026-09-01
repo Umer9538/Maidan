@@ -8,12 +8,25 @@ prescribes — one process, clean seams, no microservices for a launch.
 ```bash
 brew services start postgresql@15     # once
 createdb maidan                       # once
-psql -d maidan -f sql/001_schema.sql  # migrations
 npm install
+npm run migrate --db=maidan           # sql/, in order
 npm run seed                          # loads the app's own seed data
 npm start                             # http://localhost:4000
-npm run smoke                         # 36 end-to-end checks against the running server
+npm test                              # unit + service tests (needs the database)
+npm run smoke                         # 49 end-to-end checks against the running server
 ```
+
+`AUTH_SECRET` signs access tokens. Development generates a throwaway and warns; production
+refuses to start without one, because a signing key compiled into a shipped binary is the
+same as no signature at all.
+
+```bash
+AUTH_SECRET=$(node -e "console.log(require('crypto').randomBytes(48).toString('base64url'))")
+```
+
+Every seeded player can sign in, at `<player-id>@maidan.test` with the password in
+`seed.ts`. `player-self` is the app's own account and `owner-ahmed` owns Padel Republic —
+useful for poking at the owner endpoints by hand.
 
 Then point the app at it:
 
@@ -24,6 +37,26 @@ EXPO_PUBLIC_API_URL=http://192.168.0.121:4000 npx expo start --port 8090
 
 Leave `EXPO_PUBLIC_API_URL` unset and the app falls back to its in-memory mock. Both
 implement the same `MaidanApi`, so no screen knows the difference.
+
+## Authentication and authorisation
+
+They are separate problems and the code keeps them apart.
+
+**Authentication** is a bearer token, verified by `requireAuth` before any route runs. Only
+the paths in `authorize.ts`'s `PUBLIC` set skip it, so an endpoint added later is behind
+sign-in without anyone remembering to say so — forgetting fails closed rather than open.
+Access tokens last 15 minutes and are signed and stateless; refresh tokens last 30 days and
+are rows, which is what makes signing out mean something.
+
+Refresh tokens rotate, and a token presented twice revokes the whole family. Nothing here
+can tell whether the second use was the owner or a thief, so neither keeps the session. The
+client side of that matters: several requests hitting 401 at once must start **one**
+refresh, or the app signs itself out. `createHttpApi` shares the in-flight refresh for
+exactly this reason.
+
+**Authorisation** is per row, in `authorize.ts`, because knowing who is calling is not the
+same as knowing what is theirs. "Not yours" and "not found" give the same answer — a
+distinct one turns any id parameter into a probe for which records exist.
 
 ## The two things that must never break
 
@@ -51,9 +84,12 @@ construction, so they compile here unchanged.
 
 ## Not done yet
 
-- **Auth is a stub.** The caller's id arrives in `x-user-id`. Phone + OTP and real tokens
-  come with the SMS provider; every handler reads the id from `currentUser`, so that swap
-  touches one function.
+- **No SMS provider.** OTP codes are generated, hashed and rate-limited for real, but
+  nothing sends them: outside production the code is logged and returned on the response so
+  the flow can be completed by hand. Wiring a provider is a change to `requestOtp` alone.
+- **Passwords cannot be reset.** `/auth/login` and the OTP flow both work; there is no
+  "forgot password" round trip yet, so an account with a lost password has to sign in by
+  phone instead.
 - **No payment gateway.** `payment_events` exists to store raw webhooks for replay
   (docs/05 §5.2), but nothing writes to it yet. A booking is currently confirmed on the
   client's say-so; in production it must confirm on a verified webhook, never a callback.

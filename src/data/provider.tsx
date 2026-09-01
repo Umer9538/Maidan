@@ -10,7 +10,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { createContext, useContext, useMemo, type ReactNode } from 'react';
 
 import { ApiError, type MaidanApi } from './api';
-import { createHttpApi } from './http-api';
+import { createHttpApi, type TokenProvider } from './http-api';
 import { createMockApi } from './mock-api';
 
 /**
@@ -23,13 +23,10 @@ import { createMockApi } from './mock-api';
  *
  * On a device, `localhost` is the phone, not your Mac — use the LAN address Expo prints.
  */
-export function resolveApi(): MaidanApi {
+export function resolveApi(tokens?: TokenProvider): MaidanApi {
   const baseUrl = process.env.EXPO_PUBLIC_API_URL;
   if (baseUrl) {
-    return createHttpApi({
-      baseUrl: baseUrl.replace(/\/$/, ''),
-      userId: process.env.EXPO_PUBLIC_API_USER ?? 'player-self',
-    });
+    return createHttpApi({ baseUrl: baseUrl.replace(/\/$/, ''), tokens });
   }
   return createMockApi({ seedBookings: true });
 }
