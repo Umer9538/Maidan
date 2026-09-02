@@ -85,6 +85,24 @@ export interface Venue {
   cancellationPolicyId: string;
 }
 
+/**
+ * A window a ground has closed.
+ *
+ * `courtId` null covers every court — Eid closes the building, resurfacing closes one
+ * pitch. Bookings already taken inside the window are left alone: the closure stops
+ * anything further being sold, and what to do about games already booked stays the owner's
+ * decision rather than a side effect of tapping a date.
+ */
+export interface Blackout {
+  id: string;
+  venueId: string;
+  courtId: string | null;
+  startsAt: Timestamp;
+  endsAt: Timestamp;
+  /** Shown to the owner on their own calendar, never to players. */
+  reason: string;
+}
+
 export type Amenity =
   | 'parking'
   | 'washrooms'

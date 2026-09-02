@@ -45,3 +45,6 @@ example
 # Local build output and scratch
 dist-web/
 coverage/
+
+# Uploaded photos. Local disk is the development store; production needs object storage.
+server/uploads/

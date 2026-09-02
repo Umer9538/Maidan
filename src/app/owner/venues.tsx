@@ -143,6 +143,10 @@ export default function MyVenuesScreen() {
                   />
                 </View>
 
+                {/*
+                  Managing the listing, always available — an owner can enter courts and
+                  close dates while their ground is still in review.
+                */}
                 <View style={styles.actions}>
                   <Button
                     label="Edit"
@@ -162,46 +166,56 @@ export default function MyVenuesScreen() {
                     style={styles.action}
                     testID={`courts-${venue.id}`}
                   />
-
-                  {/*
-                    Only the states where the owner has something to do get a control. A
-                    ground in review has nothing for them to press, and a button that only
-                    ever fails is worse than no button.
-                  */}
-                  {venue.status === 'verified' ? (
-                    <Button
-                      label="Go live"
-                      onPress={() => publish.mutate(venue.id)}
-                      loading={publish.isPending}
-                      style={styles.action}
-                      testID={`publish-${venue.id}`}
-                    />
-                  ) : null}
-
-                  {venue.status === 'live' ? (
-                    <Button
-                      label="Pause"
-                      variant="soft"
-                      onPress={() => unpublish.mutate(venue.id)}
-                      loading={unpublish.isPending}
-                      style={styles.action}
-                      testID={`unpublish-${venue.id}`}
-                    />
-                  ) : null}
-
-                  {venue.status === 'live' ? (
-                    <Button
-                      label="Day sheet"
-                      onPress={() =>
-                        router.push({
-                          pathname: '/owner/dashboard',
-                          params: { venueId: venue.id },
-                        })
-                      }
-                      style={styles.action}
-                    />
-                  ) : null}
+                  <Button
+                    label="Closed dates"
+                    variant="soft"
+                    onPress={() =>
+                      router.push({ pathname: '/owner/blackouts', params: { venueId: venue.id } })
+                    }
+                    style={styles.action}
+                    testID={`blackouts-${venue.id}`}
+                  />
                 </View>
+
+                {/*
+                  Trading. Only the states where there is something to do get a control: a
+                  ground in review has nothing for the owner to press, and a button that can
+                  only fail is worse than no button.
+                */}
+                {venue.status === 'verified' || venue.status === 'live' ? (
+                  <View style={styles.actions}>
+                    {venue.status === 'verified' ? (
+                      <Button
+                        label="Go live"
+                        onPress={() => publish.mutate(venue.id)}
+                        loading={publish.isPending}
+                        style={styles.action}
+                        testID={`publish-${venue.id}`}
+                      />
+                    ) : (
+                      <>
+                        <Button
+                          label="Pause"
+                          variant="soft"
+                          onPress={() => unpublish.mutate(venue.id)}
+                          loading={unpublish.isPending}
+                          style={styles.action}
+                          testID={`unpublish-${venue.id}`}
+                        />
+                        <Button
+                          label="Day sheet"
+                          onPress={() =>
+                            router.push({
+                              pathname: '/owner/dashboard',
+                              params: { venueId: venue.id },
+                            })
+                          }
+                          style={styles.action}
+                        />
+                      </>
+                    )}
+                  </View>
+                ) : null}
 
                 {publish.isError && publish.variables === venue.id ? (
                   <Text variant="meta" color={colors.danger} style={styles.next}>

@@ -1,15 +1,17 @@
 /**
- * Courts — how much space a ground actually has.
+ * Courts — how much space a ground has, and what each space costs.
  *
- * The second half of onboarding, and the half that decides what players can book. A venue
- * with no courts cannot go live: it would sit in search as a ground with nothing on it.
+ * A venue with no courts cannot go live: it would sit in search as a ground with nothing on
+ * it. Each court is one bookable thing at one price, so three identical pitches are three
+ * rows rather than a quantity field — that is what lets three groups book nine o'clock on a
+ * Friday without any of them being turned away at the gate.
  *
- * Each court is one bookable thing at one price, so three identical pitches are three rows
- * rather than a quantity field. That is what makes two people able to book "a pitch" at
- * 9 PM on a Friday without either of them being turned away at the gate.
+ * Tapping a court edits it. Prices move, a pitch gets a roof, an evening rate turns out to
+ * be too low; an owner who has to ask us to change their own rate stops bothering with the
+ * app.
  */
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { Alert, KeyboardAvoidingView, ScrollView, StyleSheet, View } from 'react-native';
 
 import { Icon } from '@/components/icons';
@@ -18,24 +20,25 @@ import {
   Button,
   Divider,
   NotFound,
-  PillGroup,
   PressableScale,
   Screen,
   Text,
-  TextField,
-  Toggle,
 } from '@/components/ui';
-import { useAddCourt, useCourts, useMyVenues, usePublishVenue, useRemoveCourt } from '@/data/queries';
-import { FORMATS_BY_SPORT, FORMAT_LABELS, SPORT_LABELS } from '@/domain/labels';
-import type { MatchFormat, Sport } from '@/domain/types';
+import type { CreateCourtInput } from '@/data/api';
+import {
+  useAddCourt,
+  useCourts,
+  useMyVenues,
+  usePublishVenue,
+  useRemoveCourt,
+  useUpdateCourt,
+} from '@/data/queries';
+import { FORMAT_LABELS, SPORT_LABELS } from '@/domain/labels';
+import { blankCourt, CourtForm, type CourtFormValues } from '@/features/owner/court-form';
+import { formatWallClock } from '@/lib/datetime';
 import { formatPkrPerHour } from '@/lib/money';
 import { useGoBack } from '@/lib/navigation';
 import { colors, radius, s, shadow, spacing } from '@/theme';
-
-const SPORTS = (['padel', 'futsal', 'cricket'] as const).map((sport) => ({
-  value: sport,
-  label: SPORT_LABELS[sport],
-}));
 
 export default function CourtsScreen() {
   const { venueId } = useLocalSearchParams<{ venueId: string }>();
@@ -45,60 +48,47 @@ export default function CourtsScreen() {
   const venues = useMyVenues();
   const courts = useCourts(venueId ?? '');
   const add = useAddCourt();
+  const update = useUpdateCourt();
   const remove = useRemoveCourt();
   const publish = usePublishVenue();
 
-  const [name, setName] = useState('');
-  const [sport, setSport] = useState<Sport>('padel');
-  const [format, setFormat] = useState<MatchFormat>('padel_doubles');
-  const [price, setPrice] = useState('');
-  const [indoor, setIndoor] = useState(true);
-  const [submitted, setSubmitted] = useState(false);
+  /** The court being edited, or null when the form is adding a new one. */
+  const [editingId, setEditingId] = useState<string | null>(null);
+
+  const list = useMemo(() => courts.data ?? [], [courts.data]);
+  const editing = list.find((court) => court.id === editingId) ?? null;
+
+  /**
+   * Rebuilt only when the target changes, because `CourtForm` reloads its fields whenever
+   * this object does — a new one every render would wipe what the owner was typing.
+   */
+  const initial = useMemo<CourtFormValues>(
+    () =>
+      editing
+        ? {
+            name: editing.name,
+            sport: editing.sport,
+            format: editing.format,
+            indoor: editing.indoor,
+            price: String(editing.basePricePerHour),
+            peakRules: editing.peakRules.map((rule) => ({ ...rule })),
+          }
+        : blankCourt(),
+    [editing],
+  );
 
   // Opened without an id — a stale link. The court list is disabled without one, and a
-  // disabled query never leaves `pending`, so the spinner would never clear.
+  // disabled query never leaves `pending`, so the spinner below would never clear.
   if (!venueId) return <NotFound title="Courts" record="ground" onBack={goBack} />;
 
   const venue = (venues.data ?? []).find((candidate) => candidate.id === venueId);
-  const list = courts.data ?? [];
-  const rupees = Number(price);
 
-  const nameError = submitted && name.trim().length === 0 ? 'Give the court a name' : undefined;
-  const priceError =
-    submitted && (!Number.isInteger(rupees) || rupees <= 0)
-      ? 'Enter the hourly rate in whole rupees'
-      : undefined;
-
-  const chooseSport = (next: Sport) => {
-    setSport(next);
-    // The format has to belong to the sport, or a padel court ends up recorded as futsal
-    // 5v5 and the whole matchmaking side of it is wrong from the start.
-    setFormat(FORMATS_BY_SPORT[next][0]);
-  };
-
-  const submit = () => {
-    setSubmitted(true);
-    if (name.trim().length === 0 || !Number.isInteger(rupees) || rupees <= 0) return;
-
-    add.mutate(
-      {
-        venueId,
-        court: {
-          name: name.trim(),
-          sport,
-          format,
-          indoor,
-          basePricePerHour: rupees,
-        },
-      },
-      {
-        onSuccess: () => {
-          setName('');
-          setPrice('');
-          setSubmitted(false);
-        },
-      },
-    );
+  const save = (input: CreateCourtInput) => {
+    if (editingId) {
+      update.mutate({ courtId: editingId, patch: input }, { onSuccess: () => setEditingId(null) });
+    } else {
+      add.mutate({ venueId, court: input });
+    }
   };
 
   const confirmRemove = (courtId: string, courtName: string) =>
@@ -109,6 +99,7 @@ export default function CourtsScreen() {
         style: 'destructive',
         onPress: () =>
           remove.mutate(courtId, {
+            onSuccess: () => setEditingId((current) => (current === courtId ? null : current)),
             onError: (error) => Alert.alert('Cannot remove', (error as Error).message),
           }),
       },
@@ -125,94 +116,85 @@ export default function CourtsScreen() {
             that is what lets three groups book nine o&apos;clock at once.
           </Text>
 
-          {list.map((court) => (
-            <View key={court.id} style={styles.court} testID={`court-${court.id}`}>
-              <View style={styles.courtText}>
-                <Text variant="cardTitle">{court.name}</Text>
-                <Text variant="meta" color={colors.textSecondary}>
-                  {SPORT_LABELS[court.sport]} · {FORMAT_LABELS[court.format]} ·{' '}
-                  {court.indoor ? 'Indoor' : 'Outdoor'}
-                </Text>
+          {list.map((court) => {
+            const open = court.id === editingId;
+            return (
+              <View key={court.id} style={[styles.court, open && styles.courtOpen]}>
+                <PressableScale
+                  onPress={() => setEditingId(open ? null : court.id)}
+                  accessibilityLabel={`Edit ${court.name}`}
+                  accessibilityState={{ expanded: open }}
+                  style={styles.courtHead}
+                  testID={`court-${court.id}`}
+                >
+                  <View style={styles.courtText}>
+                    <Text variant="cardTitle">{court.name}</Text>
+                    <Text variant="meta" color={colors.textSecondary}>
+                      {SPORT_LABELS[court.sport]} · {FORMAT_LABELS[court.format]} ·{' '}
+                      {court.indoor ? 'Indoor' : 'Outdoor'}
+                    </Text>
+                    {/* The evening rate is what an owner comes here to check. */}
+                    {court.peakRules.map((rule, index) => (
+                      <Text key={index} variant="meta" color={colors.orangeInk}>
+                        {formatWallClock(rule.from)} – {formatWallClock(rule.to)} ·{' '}
+                        {formatPkrPerHour(rule.pricePerHour)}
+                      </Text>
+                    ))}
+                  </View>
+
+                  <View style={styles.courtRight}>
+                    <Text variant="metaStrong" color={colors.orangeInk}>
+                      {formatPkrPerHour(court.basePricePerHour)}
+                    </Text>
+                    <Icon
+                      name={open ? 'arrow-left' : 'chevron-right'}
+                      size={s(16)}
+                      color={colors.textSecondary}
+                    />
+                  </View>
+                </PressableScale>
+
+                {open ? (
+                  <>
+                    <Divider />
+                    <CourtForm
+                      initial={initial}
+                      submitLabel="Save changes"
+                      busy={update.isPending}
+                      error={update.isError ? (update.error as Error).message : undefined}
+                      onSubmit={save}
+                      onCancel={() => setEditingId(null)}
+                    />
+                    <PressableScale
+                      onPress={() => confirmRemove(court.id, court.name)}
+                      accessibilityLabel={`Remove ${court.name}`}
+                      style={styles.remove}
+                      testID={`remove-${court.id}`}
+                    >
+                      <Text variant="metaStrong" color={colors.danger}>
+                        Remove this court
+                      </Text>
+                    </PressableScale>
+                  </>
+                ) : null}
               </View>
-              <Text variant="metaStrong" color={colors.orangeInk}>
-                {formatPkrPerHour(court.basePricePerHour)}
-              </Text>
-              <PressableScale
-                onPress={() => confirmRemove(court.id, court.name)}
-                accessibilityLabel={`Remove ${court.name}`}
-                testID={`remove-${court.id}`}
-              >
-                <Icon name="more-vertical" size={s(18)} color={colors.textSecondary} />
-              </PressableScale>
-            </View>
-          ))}
+            );
+          })}
 
-          <Divider />
-
-          <Text variant="cardTitle" style={styles.addTitle}>
-            Add a court
-          </Text>
-
-          <TextField
-            value={name}
-            onChangeText={setName}
-            placeholder="Court 1"
-            error={nameError}
-            accessibilityLabel="Court name"
-            testID="court-name"
-          />
-
-          <View style={styles.gap} />
-          <PillGroup options={SPORTS} value={sport} onChange={chooseSport} testID="court-sport" />
-
-          <View style={styles.gap} />
-          <PillGroup
-            options={FORMATS_BY_SPORT[sport].map((value) => ({
-              value,
-              label: FORMAT_LABELS[value],
-            }))}
-            value={format}
-            onChange={setFormat}
-            testID="court-format"
-          />
-
-          <View style={styles.gap} />
-          <TextField
-            icon="wallet"
-            value={price}
-            onChangeText={setPrice}
-            placeholder="3000"
-            keyboardType="number-pad"
-            prefix="Rs"
-            error={priceError}
-            accessibilityLabel="Price per hour"
-            testID="court-price"
-          />
-          <Text variant="meta" color={colors.textSecondary} style={styles.hint}>
-            The standard hourly rate. Evening rates can be set later.
-          </Text>
-
-          <View style={styles.toggleRow}>
-            <Toggle value={indoor} onValueChange={setIndoor} accessibilityLabel="Indoor" />
-            <Text variant="body" style={styles.toggleLabel}>
-              Indoor
-            </Text>
-          </View>
-
-          {add.isError ? (
-            <Text variant="meta" color={colors.danger}>
-              {(add.error as Error).message}
-            </Text>
+          {/* The add form is hidden while editing, so there is only ever one form on screen. */}
+          {editingId === null ? (
+            <>
+              <Divider />
+              <Text variant="cardTitle">Add a court</Text>
+              <CourtForm
+                initial={initial}
+                submitLabel="Add court"
+                busy={add.isPending}
+                error={add.isError ? (add.error as Error).message : undefined}
+                onSubmit={save}
+              />
+            </>
           ) : null}
-
-          <Button
-            label="Add court"
-            variant="soft"
-            onPress={submit}
-            loading={add.isPending}
-            style={styles.addCta}
-            testID="add-court"
-          />
 
           {/*
             Only offered once the ground is approved and has something to book. Before that
@@ -250,21 +232,17 @@ const styles = StyleSheet.create({
   flex: { flex: 1 },
   scroll: { paddingHorizontal: spacing.gutter, paddingBottom: spacing.xxl, gap: spacing.md },
   court: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: spacing.md,
     backgroundColor: colors.card,
     borderRadius: radius.card,
     padding: spacing.md,
+    gap: spacing.sm,
     ...shadow.card,
   },
+  courtOpen: { backgroundColor: colors.surfaceRaised },
+  courtHead: { flexDirection: 'row', alignItems: 'center', gap: spacing.md },
   courtText: { flex: 1, gap: 2 },
-  addTitle: { marginTop: spacing.xs },
-  gap: { height: spacing.xs },
-  hint: { marginTop: -spacing.xs },
-  toggleRow: { flexDirection: 'row', alignItems: 'center' },
-  toggleLabel: { marginLeft: spacing.md },
-  addCta: { marginTop: spacing.xs },
+  courtRight: { alignItems: 'flex-end', gap: s(6) },
+  remove: { alignItems: 'center', paddingVertical: spacing.md },
   publish: { marginTop: spacing.lg },
   notice: {
     flexDirection: 'row',

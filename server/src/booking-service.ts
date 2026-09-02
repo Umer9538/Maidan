@@ -71,6 +71,33 @@ async function loadCourt(courtId: string) {
  * Runs inside the caller's transaction where there is one, so the check and the write it
  * guards cannot be separated by a status change landing between them.
  */
+/**
+ * Refuses an hour the owner has closed.
+ *
+ * Marking it `blocked` in the grid is presentation; this is the rule. Without it a blackout
+ * only hides an hour from the list, and anything that posts a start time directly — a
+ * retried request, the owner's own counter — sells it anyway.
+ */
+async function assertNotBlackedOut(
+  db: Db | typeof pool,
+  courtId: string,
+  startAt: string,
+): Promise<void> {
+  const endAt = new Date(new Date(startAt).getTime() + SLOT_MINUTES * 60_000).toISOString();
+  const { rows } = await db.query(
+    `SELECT 1
+       FROM blackouts b
+       JOIN courts c ON c.venue_id = b.venue_id
+      WHERE c.id = $1
+        AND (b.court_id IS NULL OR b.court_id = $1)
+        AND b.starts_at < $3 AND b.ends_at > $2`,
+    [courtId, startAt, endAt],
+  );
+  if (rows.length > 0) {
+    throw new ApiError('slot_taken', 'That hour is closed at this ground.');
+  }
+}
+
 async function assertVenueLive(db: Db | typeof pool, courtId: string): Promise<void> {
   const { rows } = await db.query<{ status: string }>(
     `SELECT v.status
@@ -101,7 +128,7 @@ export async function listSlots(courtId: string, dayIso: string): Promise<Slot[]
 
   const range = { from: slots[0].startAt, to: slots[slots.length - 1].endAt };
 
-  const [{ rows: booked }, { rows: held }] = await Promise.all([
+  const [{ rows: booked }, { rows: held }, { rows: closed }] = await Promise.all([
     pool.query(
       `SELECT start_at FROM bookings
         WHERE court_id = $1 AND status <> 'cancelled' AND start_at >= $2 AND start_at < $3`,
@@ -112,15 +139,38 @@ export async function listSlots(courtId: string, dayIso: string): Promise<Slot[]
         WHERE court_id = $1 AND expires_at > now() AND start_at >= $2 AND start_at < $3`,
       [courtId, range.from, range.to],
     ),
+    // Windows the owner has closed. A blackout with no `court_id` covers the whole ground,
+    // which is what Eid or a tournament looks like; one with a court is a single pitch
+    // being relaid.
+    pool.query(
+      `SELECT b.starts_at, b.ends_at
+         FROM blackouts b
+         JOIN courts c ON c.venue_id = b.venue_id
+        WHERE c.id = $1
+          AND (b.court_id IS NULL OR b.court_id = $1)
+          AND b.starts_at < $3 AND b.ends_at > $2`,
+      [courtId, range.from, range.to],
+    ),
   ]);
 
   const bookedAt = new Set(booked.map((row) => row.start_at.toISOString()));
   const heldAt = new Set(held.map((row) => row.start_at.toISOString()));
+
+  /** True when any closed window overlaps this hour, not merely contains its start. */
+  const isClosed = (startAt: string, endAt: string) =>
+    closed.some(
+      (row) =>
+        new Date(row.starts_at).getTime() < new Date(endAt).getTime() &&
+        new Date(row.ends_at).getTime() > new Date(startAt).getTime(),
+    );
   const now = Date.now();
 
   return slots.map((slot) => {
+    // Booked first: an hour that is sold reads as sold even inside a window the owner has
+    // since closed, because somebody is still turning up for it.
     if (bookedAt.has(slot.startAt)) return { ...slot, status: 'booked' };
     if (heldAt.has(slot.startAt)) return { ...slot, status: 'held' };
+    if (isClosed(slot.startAt, slot.endAt)) return { ...slot, status: 'blocked' };
     if (new Date(slot.startAt).getTime() < now) return { ...slot, status: 'blocked' };
     return slot;
   });
@@ -141,6 +191,7 @@ export async function holdSlot(
 ): Promise<SlotHold> {
   await sweepHolds(pool);
   await assertVenueLive(pool, courtId);
+  await assertNotBlackedOut(pool, courtId, startAt);
 
   const taken = await pool.query(
     `SELECT 1 FROM bookings
@@ -291,6 +342,9 @@ export async function createManualBooking(input: ManualBookingInput): Promise<Bo
     // The owner's own counter, held to the same rule: a listing under review is not open
     // for business, however much its owner would like it to be.
     await assertVenueLive(db, input.courtId);
+    // The owner's own counter is held to their own closure. A pitch being relaid cannot be
+    // sold at the desk either.
+    await assertNotBlackedOut(db, input.courtId, input.startAt);
 
     const held = await db.query(
       'SELECT 1 FROM slot_holds WHERE court_id = $1 AND start_at = $2 AND expires_at > now()',

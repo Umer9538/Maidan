@@ -13,6 +13,7 @@ import type {
   ChallengeStake,
   ChatThread,
   Amenity,
+  Blackout,
   City,
   Court,
   CurrentPlayer,
@@ -31,6 +32,7 @@ import type {
   Slot,
   Sport,
   Team,
+  Timestamp,
   Venue,
 } from '@/domain/types';
 
@@ -160,6 +162,27 @@ export interface CreateVenueInput {
   about?: string;
   amenities?: Amenity[];
   photos?: string[];
+}
+
+/** A photo as the picker hands it over. */
+export interface PhotoUpload {
+  uri: string;
+  /** `image/jpeg`, `image/png`… Used for the request part; the server checks the bytes. */
+  mimeType: string;
+  fileName: string;
+}
+
+export interface CreateBlackoutInput {
+  startsAt: Timestamp;
+  endsAt: Timestamp;
+  /** Omitted closes every court at the ground. */
+  courtId?: string;
+  reason?: string;
+}
+
+export interface BlackoutCreated extends Blackout {
+  /** Bookings already inside the window. They are left alone; the owner is told. */
+  existingBookings: number;
 }
 
 export interface CreateCourtInput {
@@ -350,6 +373,26 @@ export interface MaidanApi {
   addCourt(venueId: string, input: CreateCourtInput): Promise<Court>;
   updateCourt(courtId: string, input: Partial<CreateCourtInput>): Promise<Court>;
   removeCourt(courtId: string): Promise<void>;
+  /**
+   * Uploads one photo and returns where it is served.
+   *
+   * Returns a path, not a full URL, and does not touch the venue: the caller saves it with
+   * the rest of the listing, so abandoning the form leaves an orphaned file rather than a
+   * half-changed ground.
+   */
+  uploadVenuePhoto(venueId: string, file: PhotoUpload): Promise<string>;
+
+  /** Windows the ground is closed. Only upcoming ones — past closures are history. */
+  listBlackouts(venueId: string): Promise<Blackout[]>;
+  /**
+   * Closes a window. `courtId` omitted closes the whole ground.
+   *
+   * Returns how many bookings already sit inside it, so the owner can be told rather than
+   * having those games cancelled underneath them.
+   */
+  addBlackout(venueId: string, input: CreateBlackoutInput): Promise<BlackoutCreated>;
+  removeBlackout(blackoutId: string): Promise<void>;
+
   /** Approved grounds only, and only once there is a court to book. */
   publishVenue(venueId: string): Promise<Venue>;
   /** Stops sales at once — a refit, a closed season. Bookings already made stand. */

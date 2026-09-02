@@ -14,8 +14,11 @@
  * what is theirs, so handlers that touch a specific record assert against the record
  * itself — see `authorize.ts`.
  */
+import { randomUUID } from 'node:crypto';
+
 import cors from 'cors';
 import express, { type NextFunction, type Request, type Response } from 'express';
+import multer from 'multer';
 
 import { perPlayerShare } from '@/lib/money';
 import { toPkt } from '@/lib/datetime';
@@ -58,8 +61,10 @@ import {
   releaseHold,
 } from './booking-service.js';
 import { pool } from './db.js';
+import { MAX_UPLOAD_BYTES, UPLOAD_DIR, store } from './uploads.js';
 import { ApiError } from './errors.js';
 import {
+  toBlackout,
   toBooking,
   toChallenge,
   toCourt,
@@ -77,6 +82,22 @@ import {
 const app = express();
 app.use(cors());
 app.use(express.json());
+
+/*
+ * Uploaded photos, served straight back off disk.
+ *
+ * Ahead of `requireAuth` deliberately: a venue photo is public the moment the ground is
+ * live, and gating it behind a bearer token would mean no `<Image>` could ever load one —
+ * the browser and React Native's image loader do not carry the app's token.
+ */
+app.use('/uploads', express.static(UPLOAD_DIR, { maxAge: '30d', immutable: true }));
+
+/**
+ * Held in memory rather than streamed to disk, so nothing is written until the bytes have
+ * been checked. `store()` decides what is an image; multer only stops the transfer once it
+ * is clearly too large to be one.
+ */
+const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: MAX_UPLOAD_BYTES } });
 
 /** One line per request. Enough to see what the app is doing without a logging stack. */
 app.use((req, res, next) => {
@@ -399,6 +420,27 @@ app.post('/venues/:venueId/unpublish', route(async (req, res) => {
   res.json(toVenue(rows[0]));
 }));
 
+/**
+ * Uploads one photo and returns where it lives.
+ *
+ * Behind sign-in, and behind owning the ground it is for: an open upload endpoint is
+ * somebody else's file host. The venue is not modified here — the path comes back and the
+ * client saves it with the rest of the listing, so an abandoned form leaves an orphaned
+ * file rather than a half-changed venue.
+ */
+app.post(
+  '/venues/:venueId/photos',
+  upload.single('photo'),
+  route(async (req, res) => {
+    await assertOwnsVenue(req.params.venueId, currentUser(req));
+
+    const file = (req as Request & { file?: { buffer: Buffer } }).file;
+    if (!file) throw new ApiError('validation', 'No photo was sent');
+
+    res.status(201).json({ path: await store(file.buffer) });
+  }),
+);
+
 app.get('/venues/mine', route(async (req, res) => {
   const { rows } = await pool.query('SELECT * FROM venues WHERE owner_id = $1 ORDER BY name', [
     currentUser(req),
@@ -620,6 +662,85 @@ app.post('/venues/:venueId/bookings', route(async (req, res) => {
     ownerId: currentUser(req),
   });
   res.status(201).json(booking);
+}));
+
+// ------------------------------------------------------------------- blackouts --
+//
+// Closing hours without taking the whole ground off the board. Eid closes the building;
+// resurfacing closes one pitch. See `booking-service` for where the rule is enforced —
+// these endpoints only record the window.
+
+app.get('/venues/:venueId/blackouts', route(async (req, res) => {
+  await assertOwnsVenue(req.params.venueId, currentUser(req));
+
+  const { rows } = await pool.query(
+    // Past ones are history nobody acts on, and a list that only grows is a list nobody
+    // reads. Anything still running counts as upcoming.
+    `SELECT * FROM blackouts WHERE venue_id = $1 AND ends_at > now() ORDER BY starts_at`,
+    [req.params.venueId],
+  );
+  res.json(rows.map(toBlackout));
+}));
+
+app.post('/venues/:venueId/blackouts', route(async (req, res) => {
+  await assertOwnsVenue(req.params.venueId, currentUser(req));
+
+  const startsAt = new Date(required(req.body?.startsAt, 'startsAt'));
+  const endsAt = new Date(required(req.body?.endsAt, 'endsAt'));
+  if (Number.isNaN(startsAt.getTime()) || Number.isNaN(endsAt.getTime())) {
+    throw new ApiError('validation', 'startsAt and endsAt must be ISO timestamps');
+  }
+  if (endsAt <= startsAt) {
+    throw new ApiError('validation', 'The closure has to end after it starts');
+  }
+
+  const courtId = typeof req.body?.courtId === 'string' ? req.body.courtId : null;
+  if (courtId) {
+    // Closing a court at someone else's ground is not a thing.
+    await assertOwnsCourt(courtId, currentUser(req));
+  }
+
+  /*
+   * Bookings already taken inside the window are reported, not cancelled.
+   *
+   * Cancelling here would refund and notify people as a side effect of an owner tapping a
+   * date, which is not what they asked for. The closure still stops anything further being
+   * sold; what to do about the games already booked is a decision, and it stays theirs.
+   */
+  const { rows: affected } = await pool.query<{ count: string }>(
+    `SELECT count(*) AS count FROM bookings
+      WHERE venue_id = $1 AND status <> 'cancelled'
+        AND start_at < $3 AND end_at > $2
+        AND ($4::text IS NULL OR court_id = $4)`,
+    [req.params.venueId, startsAt.toISOString(), endsAt.toISOString(), courtId],
+  );
+
+  const { rows } = await pool.query(
+    `INSERT INTO blackouts (id, venue_id, court_id, starts_at, ends_at, reason)
+     VALUES ($1,$2,$3,$4,$5,$6) RETURNING *`,
+    [
+      `blackout-${randomUUID()}`,
+      req.params.venueId,
+      courtId,
+      startsAt.toISOString(),
+      endsAt.toISOString(),
+      typeof req.body?.reason === 'string' ? req.body.reason.trim() : '',
+    ],
+  );
+
+  res.status(201).json({ ...toBlackout(rows[0]), existingBookings: Number(affected[0].count) });
+}));
+
+app.delete('/blackouts/:blackoutId', route(async (req, res) => {
+  const { rows } = await pool.query<{ venue_id: string }>(
+    'SELECT venue_id FROM blackouts WHERE id = $1',
+    [req.params.blackoutId],
+  );
+  if (rows.length === 0) throw new ApiError('not_found', 'No such closure');
+  await assertOwnsVenue(rows[0].venue_id, currentUser(req));
+
+  await pool.query('DELETE FROM blackouts WHERE id = $1', [req.params.blackoutId]);
+  res.status(204).end();
 }));
 
 app.get('/venues/:venueId/earnings', route(async (req, res) => {

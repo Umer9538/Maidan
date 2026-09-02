@@ -120,6 +120,7 @@ function RootNavigator() {
         <Stack.Screen name="owner/register" />
         <Stack.Screen name="owner/edit" />
         <Stack.Screen name="owner/courts" />
+        <Stack.Screen name="owner/blackouts" />
         <Stack.Screen name="admin/index" />
         <Stack.Screen name="admin/venues" />
         <Stack.Screen name="admin/admins" />

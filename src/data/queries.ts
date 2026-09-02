@@ -9,6 +9,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type { PaymentMode, PaymentProvider } from '@/domain/types';
 
 import type {
+  CreateBlackoutInput,
   CreateChallengeInput,
   CreateCourtInput,
   CreateTeamInput,
@@ -25,6 +26,7 @@ import { useApi } from './provider';
 export const queryKeys = {
   venues: (filters?: VenueFilters) => ['venues', filters ?? {}] as const,
   myVenues: () => ['my-venues'] as const,
+  blackouts: (venueId: string) => ['blackouts', venueId] as const,
   venuesForReview: (status: VenueStatus) => ['venues-for-review', status] as const,
   adminPlayers: (query: string) => ['admin-players', query] as const,
   venue: (venueId: string) => ['venue', venueId] as const,
@@ -505,4 +507,41 @@ export function useSetAdmin() {
       void client.invalidateQueries({ queryKey: queryKeys.currentPlayer() });
     },
   });
+}
+
+export function useBlackouts(venueId: string) {
+  const api = useApi();
+  return useQuery({
+    queryKey: queryKeys.blackouts(venueId),
+    queryFn: () => api.listBlackouts(venueId),
+    enabled: Boolean(venueId),
+  });
+}
+
+/**
+ * Closing or reopening a window changes what the slot grid shows, so the slots go stale
+ * along with the list — otherwise the owner closes a date and the day sheet keeps offering
+ * it until something else happens to refetch.
+ */
+function useBlackoutMutation<TInput, TResult>(mutationFn: (input: TInput) => Promise<TResult>) {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn,
+    onSuccess: () => {
+      void client.invalidateQueries({ queryKey: ['blackouts'] });
+      void client.invalidateQueries({ queryKey: ['slots'] });
+    },
+  });
+}
+
+export function useAddBlackout() {
+  const api = useApi();
+  return useBlackoutMutation((input: { venueId: string; blackout: CreateBlackoutInput }) =>
+    api.addBlackout(input.venueId, input.blackout),
+  );
+}
+
+export function useRemoveBlackout() {
+  const api = useApi();
+  return useBlackoutMutation((blackoutId: string) => api.removeBlackout(blackoutId));
 }

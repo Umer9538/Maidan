@@ -16,6 +16,7 @@ import { Button, PillGroup, PressableScale, Text, TextField } from '@/components
 import type { CreateVenueInput } from '@/data/api';
 import { AMENITY_LABELS, CITY_LABELS } from '@/domain/labels';
 import type { Amenity, City } from '@/domain/types';
+import { PhotoStrip } from '@/features/owner/photo-strip';
 import { colors, radius, s, spacing } from '@/theme';
 
 /** Only Lahore is live. The others are shown so an owner elsewhere knows we are coming. */
@@ -32,6 +33,7 @@ const CLOCK = /^([01]\d|2[0-3]):[0-5]\d$/;
 
 export interface VenueFormValues {
   name: string;
+  photos: string[];
   city: City;
   area: string;
   opensAt: string;
@@ -43,6 +45,7 @@ export interface VenueFormValues {
 
 export const BLANK_VENUE: VenueFormValues = {
   name: '',
+  photos: [],
   city: 'lahore',
   area: '',
   opensAt: '09:00',
@@ -59,6 +62,11 @@ export interface VenueFormProps {
   error?: string;
   /** Shown above the fields — the review notice on registering, nothing when editing. */
   notice?: string;
+  /**
+   * The ground photos live behind an upload, which needs a venue to attach them to. On
+   * registering there is not one yet, so the strip only appears once there is.
+   */
+  venueId?: string;
   onSubmit: (values: VenueFormValues) => void;
 }
 
@@ -68,6 +76,7 @@ export function VenueForm({
   busy = false,
   error,
   notice,
+  venueId,
   onSubmit,
 }: VenueFormProps) {
   const [values, setValues] = useState(initial);
@@ -203,6 +212,17 @@ export function VenueForm({
           })}
         </View>
 
+        {venueId ? (
+          <>
+            <Label>Photos</Label>
+            <PhotoStrip
+              venueId={venueId}
+              photos={values.photos}
+              onChange={(next) => set('photos', next)}
+            />
+          </>
+        ) : null}
+
         <Label>About</Label>
         <TextField
           value={values.about}
@@ -242,6 +262,7 @@ export function toVenueInput(values: VenueFormValues): Omit<CreateVenueInput, 'l
     phone: values.phone.trim(),
     about: values.about.trim(),
     amenities: values.amenities,
+    photos: values.photos,
   };
 }
 

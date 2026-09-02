@@ -7,14 +7,17 @@
     "dev": "tsx watch src/index.ts",
     "start": "tsx src/index.ts",
     "seed": "tsx src/seed.ts",
-    "migrate": "psql -d $npm_config_db -f sql/001_schema.sql -f sql/002_auth.sql -f sql/003_player_profile.sql -f sql/004_venue_approval.sql -f sql/005_hold_owner.sql",
+    "migrate": "psql -d $npm_config_db -f sql/001_schema.sql -f sql/002_auth.sql -f sql/003_player_profile.sql -f sql/004_venue_approval.sql -f sql/005_hold_owner.sql -f sql/006_blackouts.sql",
     "typecheck": "tsc --noEmit",
     "smoke": "tsx src/smoke.ts",
     "test": "node --import tsx --test \"src/**/*.test.ts\""
   },
   "dependencies": {
+    "@types/multer": "^2.2.0",
     "cors": "^2.8.5",
+    "expo-image-picker": "~17.0.11",
     "express": "^4.21.2",
+    "multer": "^2.3.0",
     "pg": "^8.13.1",
     "zod": "^3.24.1"
   },

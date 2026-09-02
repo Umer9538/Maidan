@@ -106,6 +106,36 @@ when the owner is the problem. An admin cannot remove their own access: not a se
 property, since they could grant it back from another account, but it stops the last admin
 locking the team out of the queue with one tap.
 
+## Closed dates
+
+A ground closes for Eid, resurfaces a pitch, or gives the place over to a tournament. A
+blackout is a window that cannot be booked — the whole venue when `court_id` is null, one
+court when it is set.
+
+It is a rule, not a display: `assertNotBlackedOut` runs on every path that sells an hour,
+the owner's own counter included. Marking the grid `blocked` without that would only hide
+the hour, and anything posting a start time directly would sell it anyway.
+
+Bookings already inside a new closure are **counted and reported, never cancelled**.
+Cancelling would refund and notify people as a side effect of an owner tapping a date; what
+to do about games already booked stays their decision.
+
+## Photos
+
+`POST /venues/:id/photos` takes one image and returns the path it is served at. Files land
+on local disk under `uploads/` and are served straight back — real for a single server, and
+an explicit stop-gap for anything else: two instances would each hold half the photos.
+`uploads.ts` is the seam, so swapping in S3 or R2 touches that file alone.
+
+Three limits, none of them about tidiness. **Size**, because an unbounded upload endpoint
+fills the disk. **Type**, checked against the magic bytes rather than the filename or the
+declared `Content-Type`, because both of those are whatever the uploader says. **Name**,
+generated here — a filename from a client is attacker-controlled text, and `../../` in one
+is how an upload becomes a write anywhere on disk.
+
+`/uploads` is served ahead of `requireAuth`: a venue photo is public once the ground is
+live, and React Native's image loader does not carry the app's bearer token.
+
 ## The two things that must never break
 
 **Slot integrity.** `bookings_no_overlap` is a Postgres `EXCLUDE USING gist` constraint over

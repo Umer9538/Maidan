@@ -45,7 +45,9 @@ export default function EditVenueScreen() {
             phone: venue.phone,
             about: venue.about,
             amenities: venue.amenities,
+            photos: venue.photos,
           }}
+          venueId={venueId}
           submitLabel="Save changes"
           busy={update.isPending}
           error={update.isError ? (update.error as Error).message : undefined}

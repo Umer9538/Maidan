@@ -8,6 +8,7 @@
  * the error paths exist before the backend does, instead of being retrofitted after.
  */
 import type {
+  Blackout,
   Booking,
   Challenge,
   ChatThread,
@@ -79,6 +80,7 @@ interface MutableState {
   /** Grounds listed at runtime, and the courts on them. The seeded venues are immutable. */
   venues: Venue[];
   courts: Court[];
+  blackouts: Blackout[];
 }
 
 function initialState(seedBookings: boolean, now: () => Date): MutableState {
@@ -96,6 +98,7 @@ function initialState(seedBookings: boolean, now: () => Date): MutableState {
     notifications: seed.notifications.map((notification) => ({ ...notification })),
     venues: [],
     courts: [],
+    blackouts: [],
   };
 }
 
@@ -170,6 +173,22 @@ export function createMockApi(
   const latency = () => delay(undefined);
 
   const liveHolds = () => state.holds.filter((hold) => new Date(hold.expiresAt) > now());
+
+  /**
+   * Whether the owner has closed this hour. Mirrors the server so a screen behaves the same
+   * against either — a mock that ignored blackouts would let a court be booked here and
+   * refuse it there.
+   */
+  const isClosed = (courtId: string, startAt: string, endAt: string) => {
+    const court = state.courts.find((candidate) => candidate.id === courtId);
+    return state.blackouts.some(
+      (blackout) =>
+        (blackout.courtId === courtId ||
+          (blackout.courtId === null && blackout.venueId === court?.venueId)) &&
+        blackout.startsAt < endAt &&
+        blackout.endsAt > startAt,
+    );
+  };
 
   const isTaken = (courtId: string, startAt: string) =>
     state.bookings.some(
@@ -248,8 +267,11 @@ export function createMockApi(
         const { price, isPeak } = resolveSlotPrice(court, startAt);
 
         let status: Slot['status'] = 'available';
+        // Booked first: an hour that is sold reads as sold even inside a window the owner
+        // has since closed, because somebody is still turning up for it.
         if (isTaken(courtId, startAt)) status = 'booked';
         else if (isHeld(courtId, startAt)) status = 'held';
+        else if (isClosed(courtId, startAt, end.toISOString())) status = 'blocked';
         else if (start < now()) status = 'blocked';
 
         return { courtId, startAt, endAt: end.toISOString(), price, status, isPeak };
@@ -259,6 +281,11 @@ export function createMockApi(
     },
 
     async holdSlot(courtId, startAt) {
+      const court = state.courts.find((candidate) => candidate.id === courtId);
+      const endAt = new Date(new Date(startAt).getTime() + SLOT_MINUTES * 60_000).toISOString();
+      if (court && isClosed(courtId, startAt, endAt)) {
+        throw new ApiError('slot_taken', 'That hour is closed at this ground.');
+      }
       if (isTaken(courtId, startAt)) {
         throw new ApiError('slot_taken', 'That slot has just been booked.');
       }
@@ -883,6 +910,58 @@ export function createMockApi(
       }
       state.courts = state.courts.filter((candidate) => candidate.id !== courtId);
       syncVenue(court.venueId);
+    },
+
+    async uploadVenuePhoto(_venueId, file) {
+      await latency();
+      // The picker hands back a local file URI, which renders perfectly well on the device
+      // it came from. The mock has nowhere to put it, and pretending otherwise would make
+      // the flow look finished when there is no storage behind it.
+      return file.uri;
+    },
+
+    async listBlackouts(venueId) {
+      await latency();
+      const now = Date.now();
+      return state.blackouts
+        .filter((b) => b.venueId === venueId && new Date(b.endsAt).getTime() > now)
+        .sort((a, b) => a.startsAt.localeCompare(b.startsAt))
+        .map((b) => ({ ...b }));
+    },
+
+    async addBlackout(venueId, input) {
+      await latency();
+      if (new Date(input.endsAt) <= new Date(input.startsAt)) {
+        throw new ApiError('validation', 'The closure has to end after it starts');
+      }
+
+      const blackout: Blackout = {
+        id: `blackout-${Date.now().toString(36)}`,
+        venueId,
+        courtId: input.courtId ?? null,
+        startsAt: input.startsAt,
+        endsAt: input.endsAt,
+        reason: input.reason?.trim() ?? '',
+      };
+      state.blackouts.push(blackout);
+
+      // Counted, not cancelled — same as the server. What to do about games already booked
+      // is the owner's decision, not a side effect of tapping a date.
+      const existingBookings = state.bookings.filter(
+        (booking) =>
+          booking.venueId === venueId &&
+          booking.status !== 'cancelled' &&
+          (!input.courtId || booking.courtId === input.courtId) &&
+          booking.startAt < input.endsAt &&
+          booking.endAt > input.startsAt,
+      ).length;
+
+      return { ...blackout, existingBookings };
+    },
+
+    async removeBlackout(blackoutId) {
+      await latency();
+      state.blackouts = state.blackouts.filter((b) => b.id !== blackoutId);
     },
 
     async publishVenue(venueId) {

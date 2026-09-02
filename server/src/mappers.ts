@@ -5,6 +5,7 @@
  * the contract; these functions are the only thing that knows about column names.
  */
 import type {
+  Blackout,
   Booking,
   Challenge,
   ChatThread,
@@ -48,6 +49,17 @@ export function toCurrentPlayer(row: Row, ownedVenueIds: string[]): CurrentPlaye
     city: row.city ?? null,
     ownedVenueIds,
     isAdmin: row.is_admin === true,
+  };
+}
+
+export function toBlackout(row: Row): Blackout {
+  return {
+    id: row.id,
+    venueId: row.venue_id,
+    courtId: row.court_id ?? null,
+    startsAt: row.starts_at.toISOString(),
+    endsAt: row.ends_at.toISOString(),
+    reason: row.reason ?? '',
   };
 }
 

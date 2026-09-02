@@ -9,6 +9,7 @@
  * screens already handle. A "slot taken" stays a "slot taken".
  */
 import type {
+  Blackout,
   Booking,
   Challenge,
   ChatThread,
@@ -27,6 +28,7 @@ import type {
 import {
   ApiError,
   type AuthSession,
+  type BlackoutCreated,
   type ChallengeResult,
   type CreateBookingInput,
   type CreateChallengeInput,
@@ -237,6 +239,44 @@ export function createHttpApi({
     addCourt: (venueId, input) => request<Court>('POST', `/venues/${venueId}/courts`, input),
     updateCourt: (courtId, input) => request<Court>('PATCH', `/courts/${courtId}`, input),
     removeCourt: (courtId) => request<void>('DELETE', `/courts/${courtId}`),
+    /*
+     * Multipart, so this does not go through `request` — that one sets a JSON content type
+     * and stringifies the body, and a `FormData` needs neither. The token is attached by
+     * hand for the same reason. No refresh-and-retry here: an upload is a single
+     * deliberate action a player can repeat, not a background read worth rescuing.
+     */
+    async uploadVenuePhoto(venueId, file) {
+      const form = new FormData();
+      form.append('photo', {
+        uri: file.uri,
+        name: file.fileName,
+        type: file.mimeType,
+      } as unknown as Blob);
+
+      const token = await tokens?.getAccessToken();
+      const response = await fetch(`${baseUrl}/venues/${venueId}/photos`, {
+        method: 'POST',
+        headers: token ? { authorization: `Bearer ${token}` } : undefined,
+        body: form,
+      }).catch(() => {
+        throw new ApiError('network', 'Could not reach Maidan. Check your connection.');
+      });
+
+      const text = await response.text();
+      const payload = text ? JSON.parse(text) : null;
+      if (!response.ok) {
+        throw new ApiError(payload?.error?.code ?? 'network', payload?.error?.message ?? 'Upload failed');
+      }
+
+      // Stored as a path; the host is the app's own base URL, which changes when the server
+      // moves and must not be baked into a venue record.
+      return `${baseUrl}${payload.path}` as string;
+    },
+
+    listBlackouts: (venueId) => request<Blackout[]>('GET', `/venues/${venueId}/blackouts`),
+    addBlackout: (venueId, input) =>
+      request<BlackoutCreated>('POST', `/venues/${venueId}/blackouts`, input),
+    removeBlackout: (blackoutId) => request<void>('DELETE', `/blackouts/${blackoutId}`),
     publishVenue: (venueId) => request<Venue>('POST', `/venues/${venueId}/publish`),
     unpublishVenue: (venueId) => request<Venue>('POST', `/venues/${venueId}/unpublish`),
 
