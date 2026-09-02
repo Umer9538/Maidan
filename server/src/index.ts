@@ -403,13 +403,16 @@ app.get('/courts/:courtId/slots', route(async (req, res) => {
 }));
 
 app.post('/holds', route(async (req, res) => {
-  const courtId = required(req.body?.courtId, 'courtId');
-  const startAt = required(req.body?.startAt, 'startAt');
-  res.status(201).json(await holdSlot(courtId, startAt));
+  const hold = await holdSlot(
+    required(req.body?.courtId, 'courtId'),
+    required(req.body?.startAt, 'startAt'),
+    currentUser(req),
+  );
+  res.status(201).json(hold);
 }));
 
 app.delete('/holds/:holdId', route(async (req, res) => {
-  await releaseHold(req.params.holdId);
+  await releaseHold(req.params.holdId, currentUser(req));
   res.status(204).end();
 }));
 

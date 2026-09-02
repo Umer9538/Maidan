@@ -244,6 +244,43 @@ async function main() {
   check('earnings count the day', earnings.json?.bookingCount >= 2);
   check('and separate cash from collected', earnings.json?.dueAtVenue > 0);
 
+  console.log('\nholds belong to somebody');
+  /*
+   * A hold had no owner at all until this branch: `slot_holds` recorded the court and the
+   * time but not who was holding it, so releasing one and redeeming one both took an id and
+   * acted on it. Ids are random and only returned to the holder, but "hard to guess" is not
+   * an authorisation model — and redemption is the step that takes money.
+   */
+  const mine = await call('POST', '/holds', { courtId: 'court-pr-1', startAt: free[3].startAt });
+  check('a hold is taken', mine.status === 201, `${mine.status}`);
+
+  const stolen = await call('DELETE', `/holds/${mine.json.id}`, undefined, owner);
+  check('another player releasing it does nothing', stolen.status === 204, `${stolen.status}`);
+  const stillHeld = await call('GET', `/courts/court-pr-1/slots?day=${dayParam}`);
+  check(
+    'and the slot is still held afterwards',
+    stillHeld.json.find((slot: any) => slot.startAt === free[3].startAt)?.status === 'held',
+  );
+
+  const hijacked = await call(
+    'POST',
+    '/bookings',
+    {
+      intentId: `intent-hijack-${Date.now()}`,
+      holdId: mine.json.id,
+      paymentMode: 'deposit',
+      provider: 'jazzcash',
+    },
+    owner,
+  );
+  check(
+    'another player cannot redeem it into a booking',
+    hijacked.json?.error?.code === 'hold_expired',
+    `${hijacked.status} ${hijacked.json?.error?.code}`,
+  );
+
+  await call('DELETE', `/holds/${mine.json.id}`);
+
   console.log('\nauthorisation');
   /*
    * Every one of these was reachable before this branch, by anyone who could reach the

@@ -134,7 +134,11 @@ export interface SlotHold {
   expiresAt: string;
 }
 
-export async function holdSlot(courtId: string, startAt: string): Promise<SlotHold> {
+export async function holdSlot(
+  courtId: string,
+  startAt: string,
+  userId: string,
+): Promise<SlotHold> {
   await sweepHolds(pool);
   await assertVenueLive(pool, courtId);
 
@@ -151,9 +155,9 @@ export async function holdSlot(courtId: string, startAt: string): Promise<SlotHo
 
   try {
     await pool.query(
-      `INSERT INTO slot_holds (id, court_id, start_at, end_at, expires_at)
-       VALUES ($1, $2, $3, $4, $5)`,
-      [id, courtId, startAt, endAt, expiresAt],
+      `INSERT INTO slot_holds (id, court_id, start_at, end_at, expires_at, user_id)
+       VALUES ($1, $2, $3, $4, $5, $6)`,
+      [id, courtId, startAt, endAt, expiresAt, userId],
     );
   } catch (error) {
     // The unique index is what makes two players racing for one slot safe.
@@ -166,8 +170,15 @@ export async function holdSlot(courtId: string, startAt: string): Promise<SlotHo
   return { id, courtId, startAt, endAt, expiresAt };
 }
 
-export async function releaseHold(holdId: string): Promise<void> {
-  await pool.query('DELETE FROM slot_holds WHERE id = $1', [holdId]);
+/**
+ * Releases a hold, and only the caller's own.
+ *
+ * Silent when it matches nothing: a hold that has already expired, been redeemed, or was
+ * never yours all mean the same thing to the client — stop holding it — and answering
+ * differently would say whether a given hold id exists.
+ */
+export async function releaseHold(holdId: string, userId: string): Promise<void> {
+  await pool.query('DELETE FROM slot_holds WHERE id = $1 AND user_id = $2', [holdId, userId]);
 }
 
 export interface CreateBookingInput {
@@ -189,9 +200,11 @@ export async function createBooking(input: CreateBookingInput): Promise<Booking>
     await sweepHolds(db);
 
     // Locked so a concurrent redemption of the same hold cannot slip past.
+    // Matched on the holder as well as the id. Redeeming a hold creates a booking and takes
+    // a payment, so it is the last place that should accept an id on trust.
     const { rows: holds } = await db.query(
-      'SELECT * FROM slot_holds WHERE id = $1 FOR UPDATE',
-      [input.holdId],
+      'SELECT * FROM slot_holds WHERE id = $1 AND user_id = $2 FOR UPDATE',
+      [input.holdId, input.userId],
     );
     if (holds.length === 0) throw new ApiError('hold_expired', 'Your slot hold has expired.');
 

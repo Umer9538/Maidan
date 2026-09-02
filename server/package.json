@@ -7,7 +7,7 @@
     "dev": "tsx watch src/index.ts",
     "start": "tsx src/index.ts",
     "seed": "tsx src/seed.ts",
-    "migrate": "psql -d $npm_config_db -f sql/001_schema.sql -f sql/002_auth.sql -f sql/003_player_profile.sql -f sql/004_venue_approval.sql",
+    "migrate": "psql -d $npm_config_db -f sql/001_schema.sql -f sql/002_auth.sql -f sql/003_player_profile.sql -f sql/004_venue_approval.sql -f sql/005_hold_owner.sql",
     "typecheck": "tsc --noEmit",
     "smoke": "tsx src/smoke.ts",
     "test": "node --import tsx --test \"src/**/*.test.ts\""
