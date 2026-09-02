@@ -9,6 +9,7 @@
  * Rejecting requires a note. A rejection with no reason leaves an owner with a dead listing
  * and nothing to act on, and the next thing that happens is a phone call.
  */
+import { useLocalSearchParams } from 'expo-router';
 import { useState } from 'react';
 import { KeyboardAvoidingView, ScrollView, StyleSheet, View } from 'react-native';
 
@@ -22,7 +23,12 @@ import {
   Text,
   TextField,
 } from '@/components/ui';
-import { useApproveVenue, useRejectVenue, useVenuesForReview } from '@/data/queries';
+import {
+  useApproveVenue,
+  useRejectVenue,
+  useSuspendVenue,
+  useVenuesForReview,
+} from '@/data/queries';
 import type { VenueStatus } from '@/data/api';
 import { CITY_LABELS, SPORT_LABELS } from '@/domain/labels';
 import { formatOpeningHours } from '@/lib/datetime';
@@ -31,13 +37,15 @@ import { colors, radius, s, shadow, spacing } from '@/theme';
 
 const TABS: { value: VenueStatus; label: string }[] = [
   { value: 'pending', label: 'To review' },
-  { value: 'rejected', label: 'Rejected' },
+  { value: 'rejected', label: 'Sent back' },
   { value: 'verified', label: 'Approved' },
+  { value: 'live', label: 'Live' },
 ];
 
 export default function ReviewQueueScreen() {
-  const goBack = useGoBack('/(tabs)/profile');
-  const [tab, setTab] = useState<VenueStatus>('pending');
+  const goBack = useGoBack('/admin');
+  const { status: initialStatus } = useLocalSearchParams<{ status?: VenueStatus }>();
+  const [tab, setTab] = useState<VenueStatus>(initialStatus ?? 'pending');
   /** Which card has its reject box open. Only one at a time — this is a decision, not a form. */
   const [rejecting, setRejecting] = useState<string | null>(null);
   const [note, setNote] = useState('');
@@ -45,20 +53,30 @@ export default function ReviewQueueScreen() {
   const venues = useVenuesForReview(tab);
   const approve = useApproveVenue();
   const reject = useRejectVenue();
+  const suspend = useSuspendVenue();
+
+  /** Whether the note box is asking for a rejection or a suspension. */
+  const [intent, setIntent] = useState<'reject' | 'suspend'>('reject');
 
   const list = venues.data ?? [];
 
-  const submitRejection = (venueId: string) => {
+  const submitNote = (venueId: string) => {
     if (note.trim().length === 0) return;
-    reject.mutate(
-      { venueId, note: note.trim() },
-      {
-        onSuccess: () => {
-          setRejecting(null);
-          setNote('');
-        },
+    const done = {
+      onSuccess: () => {
+        setRejecting(null);
+        setNote('');
       },
-    );
+    };
+    const input = { venueId, note: note.trim() };
+    if (intent === 'suspend') suspend.mutate(input, done);
+    else reject.mutate(input, done);
+  };
+
+  const openNote = (venueId: string, why: 'reject' | 'suspend') => {
+    setRejecting(venueId);
+    setIntent(why);
+    setNote('');
   };
 
   return (
@@ -144,9 +162,13 @@ export default function ReviewQueueScreen() {
                     <TextField
                       value={note}
                       onChangeText={setNote}
-                      placeholder="What does the owner need to fix?"
+                      placeholder={
+                        intent === 'suspend'
+                          ? 'Why is this ground coming off the board?'
+                          : 'What does the owner need to fix?'
+                      }
                       multiline
-                      accessibilityLabel="Reason for rejection"
+                      accessibilityLabel="Reason"
                       testID={`note-${venue.id}`}
                     />
                     <View style={styles.actions}>
@@ -160,36 +182,56 @@ export default function ReviewQueueScreen() {
                         style={styles.action}
                       />
                       <Button
-                        label="Send back"
-                        onPress={() => submitRejection(venue.id)}
-                        loading={reject.isPending}
+                        label={intent === 'suspend' ? 'Take it down' : 'Send back'}
+                        onPress={() => submitNote(venue.id)}
+                        loading={reject.isPending || suspend.isPending}
+                        // The note is the whole point of this box: a refusal with no reason
+                        // leaves an owner with a dead listing and nothing to act on.
                         disabled={note.trim().length === 0}
                         style={styles.action}
-                        testID={`confirm-reject-${venue.id}`}
+                        testID={`confirm-note-${venue.id}`}
                       />
                     </View>
                   </View>
                 ) : (
                   <View style={styles.actions}>
-                    {venue.status !== 'verified' ? (
-                      <Button
-                        label="Needs changes"
-                        variant="soft"
-                        onPress={() => {
-                          setRejecting(venue.id);
-                          setNote('');
-                        }}
-                        style={styles.action}
-                        testID={`reject-${venue.id}`}
-                      />
+                    {/*
+                      One control per state. A ground awaiting review can be approved or
+                      sent back; an approved one is waiting on its owner and has nothing
+                      for us to press; a live one can be taken down.
+                    */}
+                    {venue.status === 'pending' || venue.status === 'rejected' ? (
+                      <>
+                        <Button
+                          label="Needs changes"
+                          variant="soft"
+                          onPress={() => openNote(venue.id, 'reject')}
+                          style={styles.action}
+                          testID={`reject-${venue.id}`}
+                        />
+                        <Button
+                          label="Approve"
+                          onPress={() => approve.mutate({ venueId: venue.id })}
+                          loading={approve.isPending}
+                          style={styles.action}
+                          testID={`approve-${venue.id}`}
+                        />
+                      </>
                     ) : null}
-                    {venue.status !== 'verified' ? (
+
+                    {venue.status === 'verified' ? (
+                      <Text variant="meta" color={colors.textSecondary}>
+                        Approved. Waiting for the owner to go live.
+                      </Text>
+                    ) : null}
+
+                    {venue.status === 'live' ? (
                       <Button
-                        label="Approve"
-                        onPress={() => approve.mutate({ venueId: venue.id })}
-                        loading={approve.isPending}
+                        label="Take off the board"
+                        variant="soft"
+                        onPress={() => openNote(venue.id, 'suspend')}
                         style={styles.action}
-                        testID={`approve-${venue.id}`}
+                        testID={`suspend-${venue.id}`}
                       />
                     ) : null}
                   </View>

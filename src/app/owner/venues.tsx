@@ -145,6 +145,15 @@ export default function MyVenuesScreen() {
 
                 <View style={styles.actions}>
                   <Button
+                    label="Edit"
+                    variant="soft"
+                    onPress={() =>
+                      router.push({ pathname: '/owner/edit', params: { venueId: venue.id } })
+                    }
+                    style={styles.action}
+                    testID={`edit-${venue.id}`}
+                  />
+                  <Button
                     label="Courts"
                     variant="soft"
                     onPress={() =>

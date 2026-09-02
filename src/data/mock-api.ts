@@ -928,6 +928,42 @@ export function createMockApi(
       venue.reviewNote = note;
       return { ...venue };
     },
+
+    async suspendVenue(venueId, note) {
+      await latency();
+      const venue = mutableVenue(venueId);
+      if (venue.status !== 'live') throw new ApiError('validation', 'That ground is not live.');
+      venue.status = 'verified';
+      venue.reviewNote = note;
+      return { ...venue };
+    },
+
+    async listPlayersForAdmin(search) {
+      await latency();
+      const needle = search?.trim().toLowerCase() ?? '';
+      // The mock has exactly one admin — the account it signs you in as — so the list is
+      // short by construction rather than by filtering.
+      const everyone = seed.players.map((player) => ({
+        ...account,
+        id: player.id,
+        name: player.name,
+        avatarUrl: player.avatarUrl,
+        email: `${player.id}@maidan.test`,
+        isAdmin: player.id === account.id,
+      }));
+      return needle
+        ? everyone.filter((player) => player.name.toLowerCase().includes(needle))
+        : everyone.filter((player) => player.isAdmin);
+    },
+
+    async setAdmin(playerId, isAdmin) {
+      await latency();
+      if (playerId === account.id) {
+        if (!isAdmin) throw new ApiError('validation', 'You cannot remove your own admin access.');
+        account.isAdmin = true;
+      }
+      return { ...account, id: playerId, isAdmin };
+    },
   };
 
   /** A runtime venue by id. Seeded ones are immutable, so they are not offered for editing. */

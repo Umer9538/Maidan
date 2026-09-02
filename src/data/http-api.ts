@@ -247,6 +247,12 @@ export function createHttpApi({
       request<Venue>('POST', `/admin/venues/${venueId}/approve`, { note }),
     rejectVenue: (venueId, note) =>
       request<Venue>('POST', `/admin/venues/${venueId}/reject`, { note }),
+    suspendVenue: (venueId, note) =>
+      request<Venue>('POST', `/admin/venues/${venueId}/suspend`, { note }),
+    listPlayersForAdmin: (search) =>
+      request<CurrentPlayer[]>('GET', `/admin/players${query({ query: search })}`),
+    setAdmin: (playerId, isAdmin) =>
+      request<CurrentPlayer>('POST', `/admin/players/${playerId}/admin`, { isAdmin }),
 
     // Auth. These are the only calls that work without a token, which is why the server
     // lists their paths as public — everything else 401s before it reaches a handler.

@@ -358,6 +358,11 @@ export interface MaidanApi {
   // --------------------------------------------------------------------------- admin --
 
   listVenuesForReview(status: VenueStatus): Promise<Venue[]>;
+  /** Pulls a live ground off the board. The owner can pause their own; this is for when we must. */
+  suspendVenue(venueId: string, note: string): Promise<Venue>;
+  /** With no search term: the current admins. With one: anyone matching, admins first. */
+  listPlayersForAdmin(query?: string): Promise<CurrentPlayer[]>;
+  setAdmin(playerId: string, isAdmin: boolean): Promise<CurrentPlayer>;
   approveVenue(venueId: string, note?: string): Promise<Venue>;
   /** The note is required: a rejection with no reason leaves an owner nothing to act on. */
   rejectVenue(venueId: string, note: string): Promise<Venue>;

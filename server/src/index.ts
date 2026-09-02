@@ -265,6 +265,81 @@ app.post('/admin/venues/:venueId/approve', route(async (req, res) => {
   res.json(toVenue(rows[0]));
 }));
 
+/**
+ * Pulling a live ground off the board.
+ *
+ * The owner can pause their own; this is for when we have to. A ground that turns out not
+ * to exist, or that stops answering its phone, cannot be left selling slots while we work
+ * out what to do — and waiting for the owner to pause it is not an option when the problem
+ * is the owner.
+ *
+ * It lands on `verified`, not `rejected`: the ground was real enough to approve once, and
+ * this is a suspension rather than a re-review.
+ */
+app.post('/admin/venues/:venueId/suspend', route(async (req, res) => {
+  const adminId = currentUser(req);
+  await assertAdmin(adminId);
+  const note = required(req.body?.note, 'note');
+
+  const { rows } = await pool.query(
+    `UPDATE venues
+        SET status = 'verified', review_note = $2, reviewed_at = now(), reviewed_by = $3
+      WHERE id = $1 AND status = 'live'
+      RETURNING *`,
+    [req.params.venueId, note, adminId],
+  );
+  if (rows.length === 0) throw new ApiError('validation', 'That ground is not live.');
+  res.json(toVenue(rows[0]));
+}));
+
+// ------------------------------------------------------------------ admin: people --
+
+/**
+ * Who can approve grounds.
+ *
+ * Granting is a deliberate act by an existing admin, and the list is small enough that
+ * search is a name match rather than anything cleverer.
+ */
+app.get('/admin/players', route(async (req, res) => {
+  await assertAdmin(currentUser(req));
+
+  const search = typeof req.query.query === 'string' ? req.query.query.trim() : '';
+  const { rows } = await pool.query(
+    search
+      ? `SELECT * FROM players
+          WHERE full_name ILIKE $1 OR email ILIKE $1 OR phone ILIKE $1
+          ORDER BY is_admin DESC, full_name
+          LIMIT 25`
+      : `SELECT * FROM players WHERE is_admin ORDER BY full_name`,
+    search ? [`%${search}%`] : [],
+  );
+
+  // The full account, because an admin choosing who to trust needs the email and phone to
+  // tell two people with the same name apart.
+  res.json(rows.map((row) => toCurrentPlayer(row, [])));
+}));
+
+app.post('/admin/players/:playerId/admin', route(async (req, res) => {
+  const adminId = currentUser(req);
+  await assertAdmin(adminId);
+
+  const grant = req.body?.isAdmin === true;
+
+  // An admin cannot remove their own rights. Not a security property — they could grant
+  // them back from another account — but it stops the last admin locking everyone out of
+  // the review queue with one tap.
+  if (!grant && req.params.playerId === adminId) {
+    throw new ApiError('validation', 'You cannot remove your own admin access.');
+  }
+
+  const { rows } = await pool.query('UPDATE players SET is_admin = $2 WHERE id = $1 RETURNING *', [
+    req.params.playerId,
+    grant,
+  ]);
+  if (rows.length === 0) throw new ApiError('not_found', 'No such player');
+  res.json(toCurrentPlayer(rows[0], []));
+}));
+
 app.post('/admin/venues/:venueId/reject', route(async (req, res) => {
   const adminId = currentUser(req);
   await assertAdmin(adminId);

@@ -26,6 +26,7 @@ export const queryKeys = {
   venues: (filters?: VenueFilters) => ['venues', filters ?? {}] as const,
   myVenues: () => ['my-venues'] as const,
   venuesForReview: (status: VenueStatus) => ['venues-for-review', status] as const,
+  adminPlayers: (query: string) => ['admin-players', query] as const,
   venue: (venueId: string) => ['venue', venueId] as const,
   reviews: (venueId: string) => ['reviews', venueId] as const,
   courts: (venueId: string) => ['courts', venueId] as const,
@@ -474,4 +475,34 @@ export function useRejectVenue() {
   return useReviewMutation((input: { venueId: string; note: string }) =>
     api.rejectVenue(input.venueId, input.note),
   );
+}
+
+export function useSuspendVenue() {
+  const api = useApi();
+  return useReviewMutation((input: { venueId: string; note: string }) =>
+    api.suspendVenue(input.venueId, input.note),
+  );
+}
+
+export function usePlayersForAdmin(search: string) {
+  const api = useApi();
+  return useQuery({
+    queryKey: queryKeys.adminPlayers(search),
+    queryFn: () => api.listPlayersForAdmin(search),
+  });
+}
+
+export function useSetAdmin() {
+  const client = useQueryClient();
+  const api = useApi();
+  return useMutation({
+    mutationFn: (input: { playerId: string; isAdmin: boolean }) =>
+      api.setAdmin(input.playerId, input.isAdmin),
+    onSuccess: () => {
+      void client.invalidateQueries({ queryKey: ['admin-players'] });
+      // The caller's own record carries `isAdmin`, and the profile decides whether to show
+      // the review queue from it.
+      void client.invalidateQueries({ queryKey: queryKeys.currentPlayer() });
+    },
+  });
 }

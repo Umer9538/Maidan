@@ -118,8 +118,11 @@ function RootNavigator() {
         <Stack.Screen name="owner/dashboard" />
         <Stack.Screen name="owner/venues" />
         <Stack.Screen name="owner/register" />
+        <Stack.Screen name="owner/edit" />
         <Stack.Screen name="owner/courts" />
+        <Stack.Screen name="admin/index" />
         <Stack.Screen name="admin/venues" />
+        <Stack.Screen name="admin/admins" />
         <Stack.Screen name="owner/walk-in" />
         <Stack.Screen name="payment/methods" />
         <Stack.Screen name="payment/add-card" options={{ presentation: 'modal' }} />

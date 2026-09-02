@@ -110,11 +110,7 @@ export default function ProfileScreen() {
 
         {/* MAIDAN staff only. Nobody else is told it exists. */}
         {player.data?.isAdmin ? (
-          <Link
-            icon="tick"
-            label="Venue review"
-            onPress={() => router.push('/admin/venues')}
-          />
+          <Link icon="tick" label="Admin" onPress={() => router.push('/admin')} />
         ) : null}
         <Link icon="calendar" label="My schedule" onPress={() => router.push('/schedule')} />
         <Link

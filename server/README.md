@@ -94,9 +94,17 @@ account at a time, and never by a script.
 GET  /admin/venues?status=pending      the review queue
 POST /admin/venues/:id/approve         -> verified
 POST /admin/venues/:id/reject          -> rejected, `note` required
+POST /admin/venues/:id/suspend         live -> verified, `note` required
+GET  /admin/players?query=             the admins, or anyone matching
+POST /admin/players/:id/admin          grant or remove, never your own
 POST /venues/:id/publish               owner: -> live
 POST /venues/:id/unpublish             owner: -> verified, stops selling at once
 ```
+
+Suspending is for when we have to pull a ground and cannot wait for its owner — not least
+when the owner is the problem. An admin cannot remove their own access: not a security
+property, since they could grant it back from another account, but it stops the last admin
+locking the team out of the queue with one tap.
 
 ## The two things that must never break
 
